@@ -61,7 +61,7 @@ async def add_buttons_if_text_found(message: types.Message):
             logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
             return
         ca = ca_match.group(0)
-        
+        output_text = f"🔗 CA: `{ca}`"  # New text With "Button"
         # Create buttons
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
            # [
@@ -75,7 +75,7 @@ async def add_buttons_if_text_found(message: types.Message):
         
         # Reply with the original message text and buttons
         await message.reply(
-            text=text,
+            text=output_text,
             reply_markup=keyboard,
             parse_mode="Markdown",
             reply_to_message_id=message.message_id
