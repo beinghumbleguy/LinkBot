@@ -5,7 +5,6 @@ import re
 import asyncio
 import logging
 import os
-import logging
 import aiogram
 
 # Enable logging
@@ -43,9 +42,8 @@ async def set_search_text(message: types.Message):
     await message.answer(f"Search text set to: {search_text} ✅")
     logger.info(f"Search text set to: {search_text}")
 
-# Handler for messages containing the search text
-@dp.message(F.text)
-async def add_buttons_if_text_found(message: types.Message):
+# Function to process messages (used for both groups and channels)
+async def process_message_with_buttons(message: types.Message):
     global search_text
     
     # Skip if no search text is set
@@ -61,26 +59,41 @@ async def add_buttons_if_text_found(message: types.Message):
             logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
             return
         ca = ca_match.group(0)
-        output_text = f"🔗 CA: `{ca}`"  # New text With "Button"
+        output_text = f"🔗 CA: `{ca}`"  # New text with "Button"
         # Create buttons
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-           # [
-            #    InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}"),
-            #   InlineKeyboardButton(text="Fasol", url=f"https://t.me/fasol_robot?start=ref_humbleguy_ca_{ca}"),
-           # ],
             [
                 InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
             ]
         ])
         
-        # Reply with the original message text and buttons
-        await message.reply(
-            text=output_text,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-            reply_to_message_id=message.message_id
-        )
+        # Reply with the message text and buttons
+        # For channels, we can't use reply_to_message_id directly, so we send a new message
+        if message.chat.type == "channel":
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        else:
+            await message.reply(
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+                reply_to_message_id=message.message_id
+            )
         logger.info(f"Added buttons for message containing '{search_text}' and CA: {ca}")
+
+# Handler for messages in groups (message updates)
+@dp.message(F.text)
+async def add_buttons_if_text_found(message: types.Message):
+    await process_message_with_buttons(message)
+
+# Handler for messages in channels (channel_post updates)
+@dp.channel_post(F.text)
+async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
+    await process_message_with_buttons(channel_post)
 
 # Startup function
 async def on_startup():
