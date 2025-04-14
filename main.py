@@ -10,8 +10,6 @@ import json
 import time
 from fake_useragent import UserAgent
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-import pytz
 
 # Enable logging
 logging.basicConfig(
@@ -190,28 +188,35 @@ def format_market_cap(market_cap: float) -> str:
         return f"{market_cap:.2f}"
     return "N/A"
 
-# Helper function to calculate token age
-def calculate_token_age(creation_timestamp: float) -> str:
-    current_time = datetime.now(pytz.timezone('America/New_York'))
-    token_time = datetime.fromtimestamp(creation_timestamp, pytz.timezone('America/New_York'))
-    diff_seconds = int((current_time - token_time).total_seconds())
-    if diff_seconds < 60:
-        return f"{diff_seconds}s"
-    minutes = diff_seconds // 60
-    if minutes < 60:
-        return f"{minutes}m"
-    hours = minutes // 60
-    remaining_minutes = minutes % 60
-    if hours < 24:
-        return f"{hours}h:{remaining_minutes:02d}m"
-    days = hours // 24
-    remaining_hours = hours % 24
-    return f"{days}d:{remaining_hours:02d}h"
+# Helper function to format price
+def format_price(price: float) -> str:
+    if price == 0:
+        return "N/A"
+    if price < 0.0001:
+        return f"{price:.7f}".rstrip('0').rstrip('.')
+    return f"{price:.6f}".rstrip('0').rstrip('.')
+
+# Helper function to format volume
+def format_volume(volume: float) -> str:
+    if volume >= 1_000_000:
+        return f"{volume / 1_000_000:.2f}M"
+    elif volume >= 1_000:
+        return f"{volume / 1_000:.2f}K"
+    elif volume > 0:
+        return f"{volume:.2f}"
+    return "N/A"
+
+# Helper function to calculate percentage change
+def calculate_percentage_change(current: float, previous: float) -> str:
+    if previous == 0 or current == 0:
+        return "N/A"
+    change = ((current - previous) / previous) * 100
+    return f"{change:+.2f}%"  # + for positive, - for negative
 
 # Function to fetch token data
 async def get_gmgn_token_data(mint_address):
     token_data_raw = await api_session_manager.fetch_token_data(mint_address)
-    logger.debug(f"Received raw token data: {token_data_raw}")
+    logger.debug(f"Received raw token data for CA {mint_address}: {token_data_raw}")
     if "error" in token_data_raw:
         logger.error(f"Error from fetch_token_data: {token_data_raw['error']}")
         return {"error": token_data_raw["error"]}
@@ -227,14 +232,20 @@ async def get_gmgn_token_data(mint_address):
         logger.debug(f"Token info for CA {mint_address}: {token_info}")
         
         price = float(token_info.get("price", 0))
-        token_data["price"] = str(price) if price != 0 else "N/A"
+        token_data["price"] = price
+        token_data["price_1h"] = float(token_info.get("price_1h", 0))
+        token_data["price_24h"] = float(token_info.get("price_24h", 0))
         total_supply = float(token_info.get("total_supply", 0))
         token_data["market_cap"] = price * total_supply
         token_data["market_cap_str"] = format_market_cap(token_data["market_cap"])
         token_data["liquidity"] = token_info.get("liquidity", "0")
+        token_data["volume_24h"] = float(token_info.get("volume_24h", 0))
+        token_data["swaps_24h"] = token_info.get("swaps_24h", 0)
+        token_data["top_10_holder_rate"] = float(token_info.get("top_10_holder_rate", 0)) * 100  # Convert to percentage
+        token_data["renounced_mint"] = bool(token_info.get("renounced_mint", 0))
+        token_data["renounced_freeze_account"] = bool(token_info.get("renounced_freeze_account", 0))
         token_data["contract"] = mint_address
         token_data["name"] = token_info.get("name", "Unknown")
-        token_data["created_at"] = token_info.get("created_at", 0) / 1000  # Convert from milliseconds to seconds
 
         logger.debug(f"Processed token data for CA {mint_address}: {token_data}")
         return token_data
@@ -281,17 +292,24 @@ async def process_message_with_buttons(message: types.Message):
         if "error" in token_data:
             output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
         else:
-            # Format price to reduce zeros
-            price = token_data.get('price', 'N/A')
-            if price != "N/A":
-                price_float = float(price)
-                price_display = f"{price_float:.1e}" if price_float < 0.001 else f"{price_float:.6f}"
-            else:
-                price_display = "N/A"
+            # Format price
+            price = token_data.get('price', 0)
+            price_display = format_price(price) if price != 0 else "N/A"
 
-            # Calculate token age
-            creation_timestamp = token_data.get('created_at', 0)
-            token_age = calculate_token_age(creation_timestamp) if creation_timestamp else "N/A"
+            # Calculate price changes
+            price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
+            price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
+
+            # Format volume
+            volume_24h = format_volume(token_data.get('volume_24h', 0))
+
+            # Format security indicators
+            security_status = (
+                f"✅ Mint Renounced\n"
+                f"✅ Freeze Renounced"
+                if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
+                else "⚠️ Check Security"
+            )
 
             # Format the output message with token info
             output_text = (
@@ -301,7 +319,11 @@ async def process_message_with_buttons(message: types.Message):
                 f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
                 f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
                 f"💰 Price: ${price_display}\n"
-                f"⏳ Age: {token_age}"
+                f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
+                f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
+                f"💸 Volume (24h): ${volume_24h}\n"
+                f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
+                f"🔒 Security: {security_status}"
             )
 
         # Create buttons
