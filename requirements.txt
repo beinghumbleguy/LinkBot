@@ -1,1 +1,4 @@
-aiogram==3.13.1
+aiogram
+cloudscraper
+fake-useragent
+pytz
