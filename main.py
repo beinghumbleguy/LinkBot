@@ -379,6 +379,74 @@ async def debug_lucid_labs_messages(message: types.Message):
     message_type = message.content_type
     logger.debug(f"Debug: Message in Lucid Labs VIP (chat {message.chat.id}) from user ID {user.id} (@{username}), Type: {message_type}, Content: {text}")
 
+# Function to process messages (used for both groups and channels)
+async def process_message_with_buttons(message: types.Message):
+    global search_text
+    
+    if not search_text:
+        return
+    
+    text = message.text.strip()
+    logger.debug(f"Processing message: {text}")
+    if search_text.lower() in text.lower():
+        ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
+        if not ca_match:
+            logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
+            return
+        ca = ca_match.group(0)
+        logger.debug(f"Detected CA: {ca}")
+        
+        token_data = await get_gmgn_token_data(ca)
+        if "error" in token_data:
+            output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
+        else:
+            price = token_data.get('price', 0)
+            price_display = format_price(price) if price != 0 else "N/A"
+            price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
+            price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
+            volume_24h = format_volume(token_data.get('volume_24h', 0))
+            security_status = (
+                f"✅ Mint Renounced\n"
+                f"✅ Freeze Renounced"
+                if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
+                else "⚠️ Check Security"
+            )
+            output_text = (
+                f"**Token Data**\n\n"
+                f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
+                f"📍 CA: `{ca}`\n"
+                f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
+                f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
+                f"💰 Price: ${price_display}\n"
+                f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
+                f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
+                f"💸 Volume (24h): ${volume_24h}\n"
+                f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
+                f"🔒 Security: {security_status}"
+            )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
+            ]
+        ])
+        
+        if message.chat.type == "channel":
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        else:
+            await message.reply(
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+                reply_to_message_id=message.message_id
+            )
+        logger.info(f"Added buttons and token info for message containing '{search_text}' and CA: {ca}")
+
 # Forward messages from specific user with CA
 @dp.message(F.text, F.chat.id == -2419720617, F.from_user.id == 6199899344)
 async def forward_user_message_with_ca(message: types.Message):
