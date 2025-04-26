@@ -305,7 +305,7 @@ async def process_message_with_buttons(message: types.Message):
         ca = ca_match.group(0)
         
         # Fetch token data from the API
-        token_data = await get_g arp_token_data(ca)
+        token_data = await get_gmgn_token_data(ca)
         if "error" in token_data:
             output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
         else:
