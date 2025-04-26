@@ -31,6 +31,9 @@ dp = Dispatcher()
 # Store the text to search for (in memory for simplicity)
 search_text = None
 
+# Store forwarded CAs to prevent duplicates
+forwarded_cas = set()
+
 # API Session Manager for fetching token data
 class APISessionManager:
     def __init__(self):
@@ -40,7 +43,7 @@ class APISessionManager:
         self._session_max_age = 3600  # 1 hour
         self._session_max_requests = 100
         self.max_retries = 5
-        self.retry_delay = 2  # Kept as per instructions
+        self.retry_delay = 2
         self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/search"
         
         self._executor = ThreadPoolExecutor(max_workers=4)
@@ -48,7 +51,7 @@ class APISessionManager:
 
         self.headers_dict = {
             "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate",  # Removed 'br' to avoid Brotli issues
+            "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "en-US,en;q=0.9",
             "Connection": "keep-alive",
             "Content-Type": "application/json",
@@ -59,7 +62,6 @@ class APISessionManager:
             "Sec-Fetch-Site": "same-origin",
         }
 
-        # Proxy list (kept unchanged as per instructions)
         self.proxy_list = [
             {
                 "host": "residential.birdproxies.com",
@@ -136,33 +138,28 @@ class APISessionManager:
                     self.session.get,
                     url,
                     headers=self.headers_dict,
-                    timeout=15  # Increased timeout
+                    timeout=15
                 )
                 headers_log = {k: v for k, v in response.headers.items()}
                 logger.debug(f"Attempt {attempt + 1} for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {headers_log}")
                 
-                # Check status code
                 if response.status_code == 200:
-                    # Validate Content-Type
                     content_type = response.headers.get('Content-Type', '')
                     if 'application/json' not in content_type.lower():
                         logger.warning(f"Non-JSON response for CA {mint_address}: Content-Type={content_type}, Response: {response.text[:500]}")
                         await self.randomize_session(force=True, use_proxy=True)
                         return {"error": f"Unexpected Content-Type: {content_type}"}
                     
-                    # Check for empty response
                     content_length = int(response.headers.get('Content-Length', -1))
                     if content_length == 0 or not response.text.strip():
                         logger.error(f"Empty response for CA {mint_address}: Content-Length={content_length}, Response: {response.text[:500]}")
                         await self.randomize_session(force=True, use_proxy=True)
                         return {"error": "Empty response from API"}
                     
-                    # Attempt JSON parsing
                     try:
                         json_data = response.json()
                         logger.debug(f"Raw response for CA {mint_address} (first 500 chars): {response.text[:500]}")
                         
-                        # Validate API response code
                         if json_data.get("code") != 0:
                             logger.error(f"API error for CA {mint_address}: code={json_data.get('code')}, msg={json_data.get('msg')}")
                             return {"error": f"API error: code={json_data.get('code')}, msg={json_data.get('msg')}"}
@@ -199,7 +196,6 @@ class APISessionManager:
                 logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
                 await asyncio.sleep(delay)
         
-        # Fallback without proxy
         logger.info(f"All proxy attempts failed for CA {mint_address}, trying without proxy")
         await self.randomize_session(force=True, use_proxy=False)
         try:
@@ -310,7 +306,7 @@ async def get_gmgn_token_data(mint_address):
         token_data["liquidity"] = token_info.get("liquidity", "0")
         token_data["volume_24h"] = float(token_info.get("volume_24h", 0))
         token_data["swaps_24h"] = token_info.get("swaps_24h", 0)
-        token_data["top_10_holder_rate"] = float(token_info.get("top_10_holder_rate", 0)) * 100  # Convert to percentage
+        token_data["top_10_holder_rate"] = float(token_info.get("top_10_holder_rate", 0)) * 100
         token_data["renounced_mint"] = bool(token_info.get("renounced_mint", 0))
         token_data["renounced_freeze_account"] = bool(token_info.get("renounced_freeze_account", 0))
         token_data["contract"] = mint_address
@@ -365,15 +361,12 @@ async def test_ca(message: types.Message):
 async def process_message_with_buttons(message: types.Message):
     global search_text
     
-    # Skip if no search text is set
     if not search_text:
         return
     
     text = message.text.strip()
     logger.debug(f"Processing message: {text}")
-    # Check if the search text is present in the message (case-insensitive)
     if search_text.lower() in text.lower():
-        # Extract CA from the message (43 or 44-character Solana address)
         ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
         if not ca_match:
             logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
@@ -381,31 +374,21 @@ async def process_message_with_buttons(message: types.Message):
         ca = ca_match.group(0)
         logger.debug(f"Detected CA: {ca}")
         
-        # Fetch token data from the API
         token_data = await get_gmgn_token_data(ca)
         if "error" in token_data:
             output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
         else:
-            # Format price
             price = token_data.get('price', 0)
             price_display = format_price(price) if price != 0 else "N/A"
-
-            # Calculate price changes
             price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
             price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
-
-            # Format volume
             volume_24h = format_volume(token_data.get('volume_24h', 0))
-
-            # Format security indicators
             security_status = (
                 f"✅ Mint Renounced\n"
                 f"✅ Freeze Renounced"
                 if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
                 else "⚠️ Check Security"
             )
-
-            # Format the output message with token info
             output_text = (
                 f"**Token Data**\n\n"
                 f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
@@ -420,14 +403,12 @@ async def process_message_with_buttons(message: types.Message):
                 f"🔒 Security: {security_status}"
             )
 
-        # Create buttons
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
             ]
         ])
         
-        # Reply with the message text and buttons
         if message.chat.type == "channel":
             await bot.send_message(
                 chat_id=message.chat.id,
@@ -450,17 +431,31 @@ async def forward_user_message_with_ca(message: types.Message):
     """
     Monitors messages in Lucid Labs VIP (chat ID -2419720617) from user @X_500SOL (ID 6199899344).
     If a Solana CA is found, forwards the message to the target group (chat ID -4757751231).
+    Skips forwarding if the CA has already been forwarded.
     """
     text = message.text.strip()
-    logger.debug(f"Message from @X_500SOL in Lucid Labs VIP: {text}")
+    user = message.from_user
+    username = user.username or "Unknown"
+    logger.debug(f"Received message in chat {message.chat.id} from user ID {user.id} (@{username}): {text}")
 
     # Extract CA from the message (43 or 44-character Solana address)
     ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
     if not ca_match:
-        logger.info(f"No CA found in message from @X_500SOL: {text}")
+        logger.info(f"No CA found in message from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
         return
 
     ca = ca_match.group(0)
+    logger.debug(f"Detected CA in message from @{username} (ID {user.id}): {ca}")
+
+    # Check for duplicate CA
+    if ca in forwarded_cas:
+        logger.info(f"CA {ca} already forwarded, skipping duplicate from @{username} (ID {user.id})")
+        await message.reply(
+            text=f"CA `{ca}` has already been forwarded.",
+            parse_mode="Markdown"
+        )
+        return
+
     logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
 
     try:
@@ -472,7 +467,10 @@ async def forward_user_message_with_ca(message: types.Message):
         )
         logger.info(f"Successfully forwarded message with CA {ca} to group -4757751231 (Message ID: {forwarded_message.message_id})")
 
-        # Optionally, send a confirmation to the source group (Lucid Labs VIP)
+        # Add CA to forwarded set
+        forwarded_cas.add(ca)
+
+        # Send confirmation to the source group (Lucid Labs VIP)
         await message.reply(
             text=f"Message with CA `{ca}` forwarded to the target group.",
             parse_mode="Markdown"
