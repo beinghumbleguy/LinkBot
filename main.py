@@ -186,7 +186,7 @@ class APISessionManager:
                     logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
                     await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
+                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} CASE1 failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
             
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed: {str(e)}")
@@ -357,6 +357,28 @@ async def test_ca(message: types.Message):
         await message.answer(output_text, parse_mode="Markdown")
     logger.info(f"Tested API fetch for CA: {ca}")
 
+# Command to debug chat and user IDs
+@dp.message(Command(commands=["debug"]))
+async def debug_info(message: types.Message):
+    user = message.from_user
+    username = user.username or "Unknown"
+    chat_id = message.chat.id
+    user_id = user.id
+    logger.info(f"Debug command received - Chat ID: {chat_id}, User ID: {user_id}, Username: @{username}")
+    await message.answer(
+        f"**Debug Info**\n\nChat ID: `{chat_id}`\nUser ID: `{user_id}`\nUsername: `@{username}`",
+        parse_mode="Markdown"
+    )
+
+# Debug handler for all messages in Lucid Labs VIP
+@dp.message(F.chat.id == -2419720617)
+async def debug_lucid_labs_messages(message: types.Message):
+    user = message.from_user
+    username = user.username or "Unknown"
+    text = message.text or "No text"
+    message_type = message.content_type
+    logger.debug(f"Debug: Message in Lucid Labs VIP (chat {message.chat.id}) from user ID {user.id} (@{username}), Type: {message_type}, Content: {text}")
+
 # Function to process messages (used for both groups and channels)
 async def process_message_with_buttons(message: types.Message):
     global search_text
@@ -430,35 +452,41 @@ async def process_message_with_buttons(message: types.Message):
 async def forward_user_message_with_ca(message: types.Message):
     """
     Monitors messages in Lucid Labs VIP (chat ID -2419720617) from user @X_500SOL (ID 6199899344).
-    If a Solana CA is found, forwards the message to the target group (chat ID -4757751231).
+    If a Solana CA is found and the message doesn't start with /pnl, forwards to the target group (chat ID -4757751231).
     Skips forwarding if the CA has already been forwarded.
     """
-    text = message.text.strip()
-    user = message.from_user
-    username = user.username or "Unknown"
-    logger.debug(f"Received message in chat {message.chat.id} from user ID {user.id} (@{username}): {text}")
-
-    # Extract CA from the message (43 or 44-character Solana address)
-    ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
-    if not ca_match:
-        logger.info(f"No CA found in message from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
-        return
-
-    ca = ca_match.group(0)
-    logger.debug(f"Detected CA in message from @{username} (ID {user.id}): {ca}")
-
-    # Check for duplicate CA
-    if ca in forwarded_cas:
-        logger.info(f"CA {ca} already forwarded, skipping duplicate from @{username} (ID {user.id})")
-        await message.reply(
-            text=f"CA `{ca}` has already been forwarded.",
-            parse_mode="Markdown"
-        )
-        return
-
-    logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
-
     try:
+        text = message.text.strip()
+        user = message.from_user
+        username = user.username or "Unknown"
+        message_type = message.content_type
+        logger.debug(f"Received message in chat {message.chat.id} from user ID {user.id} (@{username}), Type: {message_type}, Content: {text}")
+
+        # Skip messages starting with /pnl
+        if text.lower().startswith('/pnl'):
+            logger.info(f"Skipping message starting with /pnl from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
+            return
+
+        # Extract CA from the message (43 or 44-character Solana address)
+        ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
+        if not ca_match:
+            logger.info(f"No CA found in message from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
+            return
+
+        ca = ca_match.group(0)
+        logger.debug(f"Detected CA in message from @{username} (ID {user.id}): {ca}")
+
+        # Check for duplicate CA
+        if ca in forwarded_cas:
+            logger.info(f"CA {ca} already forwarded, skipping duplicate from @{username} (ID {user.id})")
+            await message.reply(
+                text=f"CA `{ca}` has already been forwarded.",
+                parse_mode="Markdown"
+            )
+            return
+
+        logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
+
         # Forward the message to the target group (chat ID -4757751231)
         forwarded_message = await bot.forward_message(
             chat_id=-4757751231,
@@ -477,9 +505,9 @@ async def forward_user_message_with_ca(message: types.Message):
         )
 
     except Exception as e:
-        logger.error(f"Failed to forward message with CA {ca}: {str(e)}")
+        logger.error(f"Error in forward_user_message_with_ca for message: {text}, CA: {ca if ca_match else 'None'}: {str(e)}")
         await message.reply(
-            text=f"⚠️ Error forwarding message with CA `{ca}`: {str(e)}",
+            text=f"⚠️ Error forwarding message with CA `{ca if ca_match else 'None'}`: {str(e)}",
             parse_mode="Markdown"
         )
 
