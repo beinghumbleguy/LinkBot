@@ -121,7 +121,7 @@ class APISessionManager:
         )
 
     async def fetch_token_data(self, mint_address):
-        logger.debug(f"Fetching data for mint_address: {mint_address}")
+        logger.debug(f"Fetching dataslag for mint_address: {mint_address}")
         await self.randomize_session()
         if not self.session:
             logger.error("Cloudscraper session not initialized")
@@ -157,7 +157,7 @@ class APISessionManager:
                 await asyncio.sleep(delay)
         
         # Fallback without proxy
-        logger.info("All proxy attempts failed, trying without proxy")
+        logger.info("All proxy Attempts failed, trying without proxy")
         await self.randomize_session(force=True, use_proxy=False)
         try:
             response = await self._run_in_executor(
@@ -349,6 +349,47 @@ async def process_message_with_buttons(message: types.Message):
                 reply_to_message_id=message.message_id
             )
         logger.info(f"Added buttons and token info for message containing '{search_text}' and CA: {ca}")
+
+# *** NEW FUNCTIONALITY: Forward messages from specific user with CA ***
+@dp.message(F.text, F.chat.id == 2419720617, F.from_user.id == 6199899344)
+async def forward_user_message_with_ca(message: types.Message):
+    """
+    Monitors messages in Lucid Labs VIP (chat ID 2419720617) from user @X_500SOL (ID 6199899344).
+    If a Solana CA is found, forwards the message to the target group (chat ID 4757751231).
+    """
+    text = message.text.strip()
+    logger.debug(f"Message from @X_500SOL in Lucid Labs VIP: {text}")
+
+    # Extract CA from the message (44-character Solana address)
+    ca_match = re.search(r'\b[A-Za-z0-9]{44}\b', text)
+    if not ca_match:
+        logger.info(f"No CA found in message from @X_500SOL: {text}")
+        return
+
+    ca = ca_match.group(0)
+    logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
+
+    try:
+        # Forward the message to the target group (chat ID 4757751231)
+        forwarded_message = await bot.forward_message(
+            chat_id=4757751231,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
+        )
+        logger.info(f"Successfully forwarded message with CA {ca} to group 4757751231 (Message ID: {forwarded_message.message_id})")
+
+        # Optionally, send a confirmation to the source group (Lucid Labs VIP)
+        await message.reply(
+            text=f"Message with CA `{ca}` forwarded to the target group.",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to forward message with CA {ca}: {str(e)}")
+        await message.reply(
+            text=f"⚠️ Error forwarding message with CA `{ca}`: {str(e)}",
+            parse_mode="Markdown"
+        )
 
 # Handler for messages in groups (message updates)
 @dp.message(F.text)
