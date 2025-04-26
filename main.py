@@ -121,7 +121,7 @@ class APISessionManager:
         )
 
     async def fetch_token_data(self, mint_address):
-        logger.debug(f"Fetching dataslag for mint_address: {mint_address}")
+        logger.debug(f"Fetching data for mint_address: {mint_address}")
         await self.randomize_session()
         if not self.session:
             logger.error("Cloudscraper session not initialized")
@@ -138,16 +138,28 @@ class APISessionManager:
                     headers=self.headers_dict,
                     timeout=10
                 )
-                logger.debug(f"Attempt {attempt + 1} - Status: {response.status_code}")
+                logger.debug(f"Attempt {attempt + 1} - Status: {response.status_code}, Response length: {len(response.text)}")
+                
+                # Check status code
                 if response.status_code == 200:
-                    return response.json()
+                    try:
+                        return response.json()
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error: {str(e)}, Response text: {response.text[:200]}")
+                        return {"error": f"Invalid JSON response: {str(e)}"}
                 elif response.status_code == 403:
                     logger.warning(f"Attempt {attempt + 1} failed with 403: {response.text[:100]}...")
                     if "Just a moment" in response.text:
                         logger.warning("Cloudflare challenge detected, rotating proxy")
                         await self.randomize_session(force=True, use_proxy=True)
+                elif response.status_code == 429:
+                    logger.warning(f"Attempt {attempt + 1} failed with 429: Rate limited")
+                    delay = self.retry_delay * (2 ** attempt) * 2  # Double delay for rate limits
+                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2}")
+                    await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Attempt {attempt + 1} failed with status {response.status_code}")
+                    logger.warning(f"Attempt {attempt + 1} failed with status {response.status_code}: {response.text[:100]}...")
+            
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
             
@@ -157,7 +169,7 @@ class APISessionManager:
                 await asyncio.sleep(delay)
         
         # Fallback without proxy
-        logger.info("All proxy Attempts failed, trying without proxy")
+        logger.info("All proxy attempts failed, trying without proxy")
         await self.randomize_session(force=True, use_proxy=False)
         try:
             response = await self._run_in_executor(
@@ -166,9 +178,14 @@ class APISessionManager:
                 headers=self.headers_dict,
                 timeout=10
             )
+            logger.debug(f"Fallback - Status: {response.status_code}, Response length: {len(response.text)}")
             if response.status_code == 200:
-                return response.json()
-            logger.warning(f"Fallback failed with status {response.status_code}")
+                try:
+                    return response.json()
+                except json.JSONDecodeError as e:
+                    logger.error(f"Fallback JSON decode error: {str(e)}, Response text: {response.text[:200]}")
+                    return {"error": f"Invalid JSON response: {str(e)}"}
+            logger.warning(f"Fallback failed with status {response.status_code}: {response.text[:100]}...")
         except Exception as e:
             logger.error(f"Final attempt without proxy failed: {str(e)}")
         
@@ -280,15 +297,15 @@ async def process_message_with_buttons(message: types.Message):
     text = message.text.strip()
     # Check if the search text is present in the message (case-insensitive)
     if search_text.lower() in text.lower():
-        # Extract CA from the message (assuming it's a 44-character Solana address)
-        ca_match = re.search(r'\b[A-Za-z0-9]{44}\b', text)
+        # Extract CA from the message (43 or 44-character Solana address)
+        ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
         if not ca_match:
             logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
             return
         ca = ca_match.group(0)
         
         # Fetch token data from the API
-        token_data = await get_gmgn_token_data(ca)
+        token_data = await get_g arp_token_data(ca)
         if "error" in token_data:
             output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
         else:
@@ -350,18 +367,18 @@ async def process_message_with_buttons(message: types.Message):
             )
         logger.info(f"Added buttons and token info for message containing '{search_text}' and CA: {ca}")
 
-# *** NEW FUNCTIONALITY: Forward messages from specific user with CA ***
-@dp.message(F.text, F.chat.id == 2419720617, F.from_user.id == 6199899344)
+# Forward messages from specific user with CA
+@dp.message(F.text, F.chat.id == -2419720617, F.from_user.id == 6199899344)
 async def forward_user_message_with_ca(message: types.Message):
     """
-    Monitors messages in Lucid Labs VIP (chat ID 2419720617) from user @X_500SOL (ID 6199899344).
-    If a Solana CA is found, forwards the message to the target group (chat ID 4757751231).
+    Monitors messages in Lucid Labs VIP (chat ID -2419720617) from user @X_500SOL (ID 6199899344).
+    If a Solana CA is found, forwards the message to the target group (chat ID -4757751231).
     """
     text = message.text.strip()
     logger.debug(f"Message from @X_500SOL in Lucid Labs VIP: {text}")
 
-    # Extract CA from the message (44-character Solana address)
-    ca_match = re.search(r'\b[A-Za-z0-9]{44}\b', text)
+    # Extract CA from the message (43 or 44-character Solana address)
+    ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
     if not ca_match:
         logger.info(f"No CA found in message from @X_500SOL: {text}")
         return
@@ -370,13 +387,13 @@ async def forward_user_message_with_ca(message: types.Message):
     logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
 
     try:
-        # Forward the message to the target group (chat ID 4757751231)
+        # Forward the message to the target group (chat ID -4757751231)
         forwarded_message = await bot.forward_message(
-            chat_id=4757751231,
+            chat_id=-4757751231,
             from_chat_id=message.chat.id,
             message_id=message.message_id
         )
-        logger.info(f"Successfully forwarded message with CA {ca} to group 4757751231 (Message ID: {forwarded_message.message_id})")
+        logger.info(f"Successfully forwarded message with CA {ca} to group -4757751231 (Message ID: {forwarded_message.message_id})")
 
         # Optionally, send a confirmation to the source group (Lucid Labs VIP)
         await message.reply(
