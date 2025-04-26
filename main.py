@@ -11,9 +11,9 @@ import time
 from fake_useragent import UserAgent
 from concurrent.futures import ThreadPoolExecutor
 
-# Enable logging
+# Enable detailed logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for more details
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     logger.error("BOT_TOKEN not set!")
-    raise ValueError("BOT_TOKEN is required")
+    raise ValueValueError("BOT_TOKEN is required")
 
 # Initialize Bot and Dispatcher
 bot = Bot(token=TOKEN)
@@ -40,7 +40,7 @@ class APISessionManager:
         self._session_max_age = 3600  # 1 hour
         self._session_max_requests = 100
         self.max_retries = 5
-        self.retry_delay = 1
+        self.retry_delay = 2  # Increased to 2 seconds for rate-limiting
         self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/search"
         
         self._executor = ThreadPoolExecutor(max_workers=4)
@@ -138,38 +138,41 @@ class APISessionManager:
                     headers=self.headers_dict,
                     timeout=10
                 )
-                logger.debug(f"Attempt {attempt + 1} - Status: {response.status_code}, Response length: {len(response.text)}")
+                logger.debug(f"Attempt {attempt + 1} for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {dict(response.headers)}")
                 
                 # Check status code
                 if response.status_code == 200:
+                    if not response.text.strip():
+                        logger.error(f"Empty response for CA {mint_address}")
+                        return {"error": "Empty response from API"}
                     try:
                         return response.json()
                     except json.JSONDecodeError as e:
-                        logger.error(f"JSON decode error: {str(e)}, Response text: {response.text[:200]}")
-                        return {"error": f"Invalid JSON response: {str(e)}"}
+                        logger.error(f"JSON decode error for CA {mint_address}: {str(e)}, Response text: {response.text[:200]}, Headers: {dict(response.headers)}")
+                        return {"error": f"Invalid JSON response for CA {mint_address}: {str(e)}"}
                 elif response.status_code == 403:
-                    logger.warning(f"Attempt {attempt + 1} failed with 403: {response.text[:100]}...")
+                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 403: {response.text[:100]}...")
                     if "Just a moment" in response.text:
-                        logger.warning("Cloudflare challenge detected, rotating proxy")
+                        logger.warning(f"Cloudflare challenge detected for CA {mint_address}, rotating proxy")
                         await self.randomize_session(force=True, use_proxy=True)
                 elif response.status_code == 429:
-                    logger.warning(f"Attempt {attempt + 1} failed with 429: Rate limited")
+                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 429: Rate limited")
                     delay = self.retry_delay * (2 ** attempt) * 2  # Double delay for rate limits
-                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2}")
+                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
                     await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Attempt {attempt + 1} failed with status {response.status_code}: {response.text[:100]}...")
+                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}...")
             
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed: {str(e)}")
             
             if attempt < self.max_retries - 1:
                 delay = self.retry_delay * (2 ** attempt)
-                logger.debug(f"Backing off for {delay}s before retry {attempt + 2}")
+                logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
                 await asyncio.sleep(delay)
         
         # Fallback without proxy
-        logger.info("All proxy attempts failed, trying without proxy")
+        logger.info(f"All proxy attempts failed for CA {mint_address}, trying without proxy")
         await self.randomize_session(force=True, use_proxy=False)
         try:
             response = await self._run_in_executor(
@@ -178,19 +181,22 @@ class APISessionManager:
                 headers=self.headers_dict,
                 timeout=10
             )
-            logger.debug(f"Fallback - Status: {response.status_code}, Response length: {len(response.text)}")
+            logger.debug(f"Fallback for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {dict(response.headers)}")
             if response.status_code == 200:
+                if not response.text.strip():
+                    logger.error(f"Empty fallback response for CA {mint_address}")
+                    return {"error": "Empty response from API"}
                 try:
                     return response.json()
                 except json.JSONDecodeError as e:
-                    logger.error(f"Fallback JSON decode error: {str(e)}, Response text: {response.text[:200]}")
-                    return {"error": f"Invalid JSON response: {str(e)}"}
-            logger.warning(f"Fallback failed with status {response.status_code}: {response.text[:100]}...")
+                    logger.error(f"Fallback JSON decode error for CA {mint_address}: {str(e)}, Response text: {response.text[:200]}, Headers: {dict(response.headers)}")
+                    return {"error": f"Invalid JSON response for CA {mint_address}: {str(e)}"}
+            logger.warning(f"Fallback for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}...")
         except Exception as e:
-            logger.error(f"Final attempt without proxy failed: {str(e)}")
+            logger.error(f"Final attempt without proxy failed for CA {mint_address}: {str(e)}")
         
-        logger.error(f"Failed to fetch data for {mint_address} after {self.max_retries} attempts")
-        return {"error": "Failed to fetch data after retries"}
+        logger.error(f"Failed to fetch data for CA {mint_address} after {self.max_retries} attempts")
+        return {"error": f"Failed to fetch data for CA {mint_address} after retries"}
 
 # Initialize the API session manager
 api_session_manager = APISessionManager()
@@ -235,15 +241,15 @@ async def get_gmgn_token_data(mint_address):
     token_data_raw = await api_session_manager.fetch_token_data(mint_address)
     logger.debug(f"Received raw token data for CA {mint_address}: {token_data_raw}")
     if "error" in token_data_raw:
-        logger.error(f"Error from fetch_token_data: {token_data_raw['error']}")
+        logger.error(f"Error from fetch_token_data for CA {mint_address}: {token_data_raw['error']}")
         return {"error": token_data_raw["error"]}
 
     try:
         token_data = {}
         
         if not token_data_raw or "data" not in token_data_raw or "tokens" not in token_data_raw["data"] or len(token_data_raw["data"]["tokens"]) == 0:
-            logger.warning(f"No valid token data in response: {token_data_raw}")
-            return {"error": "No token data returned from API."}
+            logger.warning(f"No valid token data in response for CA {mint_address}: {token_data_raw}")
+            return {"error": f"No token data returned from API for CA {mint_address}"}
         
         token_info = token_data_raw["data"]["tokens"][0]
         logger.debug(f"Token info for CA {mint_address}: {token_info}")
@@ -269,7 +275,7 @@ async def get_gmgn_token_data(mint_address):
 
     except Exception as e:
         logger.error(f"Error processing API response for CA {mint_address}: {str(e)}")
-        return {"error": f"Network or parsing error: {str(e)}"}
+        return {"error": f"Network or parsing error for CA {mint_address}: {str(e)}"}
 
 # Command to set the text to search for
 @dp.message(Command(commands=["settext"]))
@@ -295,6 +301,7 @@ async def process_message_with_buttons(message: types.Message):
         return
     
     text = message.text.strip()
+    logger.debug(f"Processing message: {text}")  # Log message text
     # Check if the search text is present in the message (case-insensitive)
     if search_text.lower() in text.lower():
         # Extract CA from the message (43 or 44-character Solana address)
@@ -303,6 +310,7 @@ async def process_message_with_buttons(message: types.Message):
             logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
             return
         ca = ca_match.group(0)
+        logger.debug(f"Detected CA: {ca}")
         
         # Fetch token data from the API
         token_data = await get_gmgn_token_data(ca)
