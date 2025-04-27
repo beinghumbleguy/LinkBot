@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from datetime import datetime
 import pytz
+import aiofiles
 
 # Enable detailed logging
 logging.basicConfig(
@@ -35,7 +36,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # Store the text to search for (in memory for simplicity)
-search_text = ape
+search_text = None
 
 # Growth check variables (matching Humble bot)
 growth_notifications_enabled = True
@@ -555,6 +556,27 @@ async def debug_info(message: types.Message):
         f"**Debug Info**\n\nChat ID: `{chat_id}`\nUser ID: `{user_id}`\nUsername: `@{username}`",
         parse_mode="Markdown"
     )
+
+# Command to download monitored tokens CSV
+@dp.message(Command(commands=["downloadcsv"]))
+async def download_csv(message: types.Message):
+    logger.info(f"Received /downloadcsv command from user {message.from_user.id} in chat {message.chat.id}")
+    if not os.path.exists(CSV_PATH):
+        await message.answer("⚠️ No monitored tokens CSV found. Try posting a CA in the VIP channel first.")
+        logger.warning(f"CSV file not found at {CSV_PATH} for /downloadcsv command")
+        return
+
+    try:
+        async with aiofiles.open(CSV_PATH, mode='rb') as file:
+            await bot.send_document(
+                chat_id=message.chat.id,
+                document=types.FSInputFile(CSV_PATH, filename="monitored_tokens.csv"),
+                caption="Here is the monitored tokens CSV file."
+            )
+        logger.info(f"Sent monitored_tokens.csv to chat {message.chat.id}")
+    except Exception as e:
+        await message.answer(f"⚠️ Error sending CSV file: {str(e)}")
+        logger.error(f"Failed to send CSV file to chat {message.chat.id}: {str(e)}")
 
 # Function to process messages (used for both groups and channels)
 async def process_message_with_buttons(message: types.Message):
