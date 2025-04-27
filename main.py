@@ -10,6 +10,9 @@ import json
 import time
 from fake_useragent import UserAgent
 from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+from datetime import datetime
+import pytz
 
 # Enable detailed logging
 logging.basicConfig(
@@ -30,6 +33,185 @@ dp = Dispatcher()
 
 # Store the text to search for (in memory for simplicity)
 search_text = None
+
+# Growth check variables (matching Humble bot)
+growth_notifications_enabled = True
+GROWTH_THRESHOLD = 1.5  # Notify when growth reaches 1.5x
+INCREMENT_THRESHOLD = 1.0  # Notify at increments of 1.0 (e.g., 1.5x, 2.5x, 3.5x)
+CHECK_INTERVAL = 30  # Seconds between growth checks
+MONITORING_DURATION = 21600  # 6 hours in seconds
+monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "message_id": int}}
+last_growth_ratios = {}  # Tracks last notified growth ratio per CA
+
+# Define channel IDs
+VIP_CHAT_ID = -1002625241334  # Lucid Labs VIP channel ID
+CSV_PATH = "/app/data/monitored_tokens.csv"  # Path to store monitored tokens
+
+def calculate_time_since(timestamp):
+    """Format time difference since timestamp in seconds, minutes, or hours:minutes."""
+    current_time = datetime.now(pytz.timezone('America/New_York'))
+    token_time = datetime.fromtimestamp(timestamp, pytz.timezone('America/New_York'))
+    diff_seconds = int((current_time - token_time).total_seconds())
+    if diff_seconds < 60:
+        return f"{diff_seconds}s"
+    minutes = diff_seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    return f"{hours}h:{remaining_minutes:02d}m"
+
+def load_monitored_tokens():
+    """Load monitored tokens from CSV on startup."""
+    global monitored_tokens, last_growth_ratios
+    if os.path.exists(CSV_PATH):
+        try:
+            df = pd.read_csv(CSV_PATH)
+            for _, row in df.iterrows():
+                key = f"{row['mint_address']}:{row['chat_id']}"
+                monitored_tokens[key] = {
+                    "mint_address": row["mint_address"],
+                    "chat_id": int(row["chat_id"]),
+                    "initial_mc": float(row["initial_mc"]),
+                    "timestamp": float(row["timestamp"]),
+                    "token_name": row["token_name"],
+                    "message_id": int(row["message_id"])
+                }
+                last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
+            logger.info(f"Loaded {len(monitored_tokens)} tokens from {CSV_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load monitored tokens from CSV: {str(e)}")
+    else:
+        logger.info(f"No existing monitored tokens CSV found at {CSV_PATH}")
+
+def save_monitored_tokens():
+    """Save monitored tokens to CSV."""
+    try:
+        df = pd.DataFrame([
+            {
+                "mint_address": data["mint_address"],
+                "chat_id": data["chat_id"],
+                "initial_mc": data["initial_mc"],
+                "timestamp": data["timestamp"],
+                "token_name": data["token_name"],
+                "message_id": data["message_id"],
+                "last_growth_ratio": last_growth_ratios.get(key, 1.0)
+            }
+            for key, data in monitored_tokens.items()
+        ])
+        df.to_csv(CSV_PATH, index=False)
+        logger.info(f"Saved {len(monitored_tokens)} tokens to {CSV_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to save monitored tokens to CSV: {str(e)}")
+
+async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: float, token_name: str, message_id: int):
+    """Add a CA to monitored tokens and save to CSV."""
+    key = f"{mint_address}:{chat_id}"
+    if key not in monitored_tokens:
+        monitored_tokens[key] = {
+            "mint_address": mint_address,
+            "chat_id": chat_id,
+            "initial_mc": initial_mc,
+            "timestamp": time.time(),
+            "token_name": token_name,
+            "message_id": message_id
+        }
+        last_growth_ratios[key] = 1.0  # Initialize last notified ratio
+        save_monitored_tokens()
+        logger.info(f"Added CA {mint_address} to monitored_tokens for chat {chat_id}")
+    else:
+        logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
+
+async def growthcheck():
+    """Periodically check market cap growth and notify for milestones (1.5x, 2.5x, etc.) in VIP channel."""
+    while True:
+        if not monitored_tokens:
+            logger.debug("No tokens to monitor, skipping growth check")
+            await asyncio.sleep(CHECK_INTERVAL)
+            continue
+
+        logger.debug(f"Starting growthcheck with monitored_tokens: {len(monitored_tokens)} tokens")
+        to_remove = []
+
+        for key, data in monitored_tokens.items():
+            ca = data["mint_address"]
+            chat_id = data["chat_id"]
+            initial_mc = data["initial_mc"]
+            token_name = data["token_name"]
+            message_id = data["message_id"]
+            timestamp = data["timestamp"]
+
+            # Only process VIP channel
+            if chat_id != VIP_CHAT_ID:
+                logger.debug(f"Skipping CA {ca} in chat {chat_id} (not VIP)")
+                continue
+
+            # Check if monitoring duration exceeded
+            current_time = datetime.now(pytz.timezone('America/New_York'))
+            token_time = datetime.fromtimestamp(timestamp, pytz.timezone('America/New_York'))
+            time_diff = (current_time - token_time).total_seconds()
+            if time_diff > MONITORING_DURATION:
+                logger.info(f"Removing CA {ca} from monitoring: exceeded 6 hours")
+                to_remove.append(key)
+                continue
+
+            # Fetch current market cap
+            token_data = await get_gmgn_token_data(ca)
+            if "error" in token_data:
+                logger.debug(f"Skipping CA {ca} due to API error: {token_data['error']}")
+                to_remove.append(key)
+                continue
+
+            current_mc = token_data.get("market_cap", 0)
+            if current_mc == 0:
+                logger.debug(f"Skipping CA {ca} due to invalid current_mc: {current_mc}")
+                to_remove.append(key)
+                continue
+
+            # Calculate growth ratio
+            growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
+
+            # Check notification threshold
+            last_ratio = last_growth_ratios.get(key, 1.0)
+            next_threshold = int(last_ratio) + INCREMENT_THRESHOLD
+
+            if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and growth_ratio >= next_threshold:
+                last_growth_ratios[key] = growth_ratio
+                time_since_added = calculate_time_since(timestamp)
+                initial_mc_str = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
+                current_mc_str = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
+                emoji = "🚀" if 2 <= growth_ratio < 5 else "🔥" if 5 <= growth_ratio < 10 else "🌙"
+                growth_str = f"**{growth_ratio:.1f}x**"
+
+                growth_message = (
+                    f"{emoji} {growth_str} | "
+                    f"💹From {initial_mc_str} ↗️ **{current_mc_str}** within **{time_since_added}**"
+                )
+
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=growth_message,
+                        parse_mode="Markdown",
+                        reply_to_message_id=message_id
+                    )
+                    logger.info(f"Sent growth notification for CA {ca} in chat {chat_id}: {growth_message}")
+                except Exception as e:
+                    logger.error(f"Failed to send growth notification for CA {ca} in chat {chat_id}: {e}")
+
+            # Log growth for debugging
+            profit_percent = ((current_mc - initial_mc) / initial_mc) * 100 if initial_mc != 0 else 0
+            logger.debug(f"CA {ca}: Initial MC={initial_mc_str}, Current MC={current_mc_str}, Growth={profit_percent:.2f}%")
+
+        # Remove expired or errored tokens
+        for key in to_remove:
+            monitored_tokens.pop(key, None)
+            last_growth_ratios.pop(key, None)
+        if to_remove:
+            save_monitored_tokens()
+            logger.info(f"Removed {len(to_remove)} expired tokens")
+
+        await asyncio.sleep(CHECK_INTERVAL)
 
 # API Session Manager for fetching token data
 class APISessionManager:
@@ -413,6 +595,20 @@ async def process_message_with_buttons(message: types.Message):
                 f"🔒 Security: {security_status}"
             )
 
+            # Add to monitored tokens if in VIP channel
+            if message.chat.id == VIP_CHAT_ID:
+                initial_mc = token_data.get("market_cap", 0)
+                if initial_mc > 0:
+                    await add_to_monitored_tokens(
+                        mint_address=ca,
+                        chat_id=message.chat.id,
+                        initial_mc=initial_mc,
+                        token_name=token_data.get("name", "Unknown"),
+                        message_id=message.message_id
+                    )
+                else:
+                    logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
@@ -447,6 +643,8 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
 
 # Startup function
 async def on_startup():
+    load_monitored_tokens()  # Load existing tokens
+    asyncio.create_task(growthcheck())  # Start growth check
     logger.info("Button Bot started")
 
 # Main function to start the bot
