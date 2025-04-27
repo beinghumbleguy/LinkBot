@@ -31,9 +31,6 @@ dp = Dispatcher()
 # Store the text to search for (in memory for simplicity)
 search_text = None
 
-# Store forwarded CAs to prevent duplicates
-forwarded_cas = set()
-
 # API Session Manager for fetching token data
 class APISessionManager:
     def __init__(self):
@@ -370,15 +367,6 @@ async def debug_info(message: types.Message):
         parse_mode="Markdown"
     )
 
-# Debug handler for all messages in Lucid Labs VIP
-@dp.message(F.chat.id == -2419720617)
-async def debug_lucid_labs_messages(message: types.Message):
-    user = message.from_user
-    username = user.username or "Unknown"
-    text = message.text or "No text"
-    message_type = message.content_type
-    logger.debug(f"Debug: Message in Lucid Labs VIP (chat {message.chat.id}) from user ID {user.id} (@{username}), Type: {message_type}, Content: {text}")
-
 # Function to process messages (used for both groups and channels)
 async def process_message_with_buttons(message: types.Message):
     global search_text
@@ -446,70 +434,6 @@ async def process_message_with_buttons(message: types.Message):
                 reply_to_message_id=message.message_id
             )
         logger.info(f"Added buttons and token info for message containing '{search_text}' and CA: {ca}")
-
-# Forward messages from specific user with CA
-@dp.message(F.text, F.chat.id == -2419720617, F.from_user.id == 6199899344)
-async def forward_user_message_with_ca(message: types.Message):
-    """
-    Monitors messages in Lucid Labs VIP (chat ID -2419720617) from user @X_500SOL (ID 6199899344).
-    If a Solana CA is found and the message doesn't start with /pnl, forwards to the target group (chat ID -4757751231).
-    Skips forwarding if the CA has already been forwarded.
-    """
-    try:
-        text = message.text.strip()
-        user = message.from_user
-        username = user.username or "Unknown"
-        message_type = message.content_type
-        logger.debug(f"Received message in chat {message.chat.id} from user ID {user.id} (@{username}), Type: {message_type}, Content: {text}")
-
-        # Skip messages starting with /pnl
-        if text.lower().startswith('/pnl'):
-            logger.info(f"Skipping message starting with /pnl from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
-            return
-
-        # Extract CA from the message (43 or 44-character Solana address)
-        ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
-        if not ca_match:
-            logger.info(f"No CA found in message from @{username} (ID {user.id}) in chat {message.chat.id}: {text}")
-            return
-
-        ca = ca_match.group(0)
-        logger.debug(f"Detected CA in message from @{username} (ID {user.id}): {ca}")
-
-        # Check for duplicate CA
-        if ca in forwarded_cas:
-            logger.info(f"CA {ca} already forwarded, skipping duplicate from @{username} (ID {user.id})")
-            await message.reply(
-                text=f"CA `{ca}` has already been forwarded.",
-                parse_mode="Markdown"
-            )
-            return
-
-        logger.info(f"Found CA {ca} in message from @X_500SOL, forwarding to target group")
-
-        # Forward the message to the target group (chat ID -4757751231)
-        forwarded_message = await bot.forward_message(
-            chat_id=-4757751231,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id
-        )
-        logger.info(f"Successfully forwarded message with CA {ca} to group -4757751231 (Message ID: {forwarded_message.message_id})")
-
-        # Add CA to forwarded set
-        forwarded_cas.add(ca)
-
-        # Send confirmation to the source group (Lucid Labs VIP)
-        await message.reply(
-            text=f"Message with CA `{ca}` forwarded to the target group.",
-            parse_mode="Markdown"
-        )
-
-    except Exception as e:
-        logger.error(f"Error in forward_user_message_with_ca for message: {text}, CA: {ca if ca_match else 'None'}: {str(e)}")
-        await message.reply(
-            text=f"⚠️ Error forwarding message with CA `{ca if ca_match else 'None'}`: {str(e)}",
-            parse_mode="Markdown"
-        )
 
 # Handler for messages in groups (message updates)
 @dp.message(F.text)
