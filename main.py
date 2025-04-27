@@ -21,6 +21,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Create data directory
+os.makedirs("/app/data", exist_ok=True)
+
 # Load environment variables
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -171,6 +174,10 @@ async def growthcheck():
             # Calculate growth ratio
             growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
 
+            # Define market cap strings for debug logging
+            initial_mc_str = f"{initial_mc / 1000:.1f}K" if initial_mc < 1_000_000 else f"{initial_mc / 1_000_000:.1f}M"
+            current_mc_str = f"{current_mc / 1000:.1f}K" if current_mc < 1_000_000 else f"{current_mc / 1_000_000:.1f}M"
+
             # Check notification threshold
             last_ratio = last_growth_ratios.get(key, 1.0)
             next_threshold = int(last_ratio) + INCREMENT_THRESHOLD
@@ -178,14 +185,14 @@ async def growthcheck():
             if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and growth_ratio >= next_threshold:
                 last_growth_ratios[key] = growth_ratio
                 time_since_added = calculate_time_since(timestamp)
-                initial_mc_str = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
-                current_mc_str = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
+                initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
+                current_mc_str_md = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
                 emoji = "🚀" if 2 <= growth_ratio < 5 else "🔥" if 5 <= growth_ratio < 10 else "🌙"
                 growth_str = f"**{growth_ratio:.1f}x**"
 
                 growth_message = (
                     f"{emoji} {growth_str} | "
-                    f"💹From {initial_mc_str} ↗️ **{current_mc_str}** within **{time_since_added}**"
+                    f"💹From {initial_mc_str_md} ↗️ **{current_mc_str_md}** within **{time_since_added}**"
                 )
 
                 try:
