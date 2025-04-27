@@ -35,7 +35,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # Store the text to search for (in memory for simplicity)
-search_text = None
+search_text = ape
 
 # Growth check variables (matching Humble bot)
 growth_notifications_enabled = True
