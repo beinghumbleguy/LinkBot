@@ -3,3 +3,4 @@ cloudscraper
 fake-useragent
 pytz
 pandas
+aiofiles
