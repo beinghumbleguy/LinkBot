@@ -2,3 +2,4 @@ aiogram
 cloudscraper
 fake-useragent
 pytz
+pandas
