@@ -14,6 +14,7 @@ import pandas as pd
 from datetime import datetime
 import pytz
 import aiofiles
+import math
 
 # Enable detailed logging
 logging.basicConfig(
@@ -41,10 +42,10 @@ search_text = None
 # Growth check variables (matching Humble bot)
 growth_notifications_enabled = True
 GROWTH_THRESHOLD = 1.5  # Notify when growth reaches 1.5x
-INCREMENT_THRESHOLD = 1.0  # Notify at increments of 1.0 (e.g., 1.5x, 2.5x, 3.5x)
+INCREMENT_THRESHOLD = 1.0  # Notify at increments of 1.0 (e.g., 1.5x, 2.0x, 3.0x)
 CHECK_INTERVAL = 30  # Seconds between growth checks
 MONITORING_DURATION = 21600  # 6 hours in seconds
-monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "message_id": int}}
+monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "symbol": str, "message_id": int}}
 last_growth_ratios = {}  # Tracks last notified growth ratio per CA
 
 # Define channel IDs
@@ -79,6 +80,7 @@ def load_monitored_tokens():
                     "initial_mc": float(row["initial_mc"]),
                     "timestamp": float(row["timestamp"]),
                     "token_name": row["token_name"],
+                    "symbol": row.get("symbol", ""),  # Default to empty string if symbol missing
                     "message_id": int(row["message_id"])
                 }
                 last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
@@ -98,6 +100,7 @@ def save_monitored_tokens():
                 "initial_mc": data["initial_mc"],
                 "timestamp": data["timestamp"],
                 "token_name": data["token_name"],
+                "symbol": data["symbol"],
                 "message_id": data["message_id"],
                 "last_growth_ratio": last_growth_ratios.get(key, 1.0)
             }
@@ -108,7 +111,7 @@ def save_monitored_tokens():
     except Exception as e:
         logger.error(f"Failed to save monitored tokens to CSV: {str(e)}")
 
-async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: float, token_name: str, message_id: int):
+async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: float, token_name: str, symbol: str, message_id: int):
     """Add a CA to monitored tokens and save to CSV."""
     key = f"{mint_address}:{chat_id}"
     if key not in monitored_tokens:
@@ -118,6 +121,7 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
             "initial_mc": initial_mc,
             "timestamp": time.time(),
             "token_name": token_name,
+            "symbol": symbol,
             "message_id": message_id
         }
         last_growth_ratios[key] = 1.0  # Initialize last notified ratio
@@ -127,7 +131,7 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
 async def growthcheck():
-    """Periodically check market cap growth and notify for milestones (1.5x, 2.5x, etc.) in VIP channel."""
+    """Periodically check market cap growth and notify for milestones (1.5x, 2.0x, etc.) in VIP channel."""
     while True:
         if not monitored_tokens:
             logger.debug("No tokens to monitor, skipping growth check")
@@ -142,6 +146,7 @@ async def growthcheck():
             chat_id = data["chat_id"]
             initial_mc = data["initial_mc"]
             token_name = data["token_name"]
+            symbol = data["symbol"]
             message_id = data["message_id"]
             timestamp = data["timestamp"]
 
@@ -162,18 +167,19 @@ async def growthcheck():
             # Fetch current market cap
             token_data = await get_gmgn_token_data(ca)
             if "error" in token_data:
-                logger.debug(f"Skipping CA {ca} due to API error: {token_data['error']}")
+                logger.debug(f"Removing CA {ca} due to API error: {token_data['error']}")
                 to_remove.append(key)
                 continue
 
             current_mc = token_data.get("market_cap", 0)
             if current_mc == 0:
-                logger.debug(f"Skipping CA {ca} due to invalid current_mc: {current_mc}")
+                logger.debug(f"Removing CA {ca} due to invalid current_mc: {current_mc}")
                 to_remove.append(key)
                 continue
 
             # Calculate growth ratio
             growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
+            logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
 
             # Define market cap strings for debug logging
             initial_mc_str = f"{initial_mc / 1000:.1f}K" if initial_mc < 1_000_000 else f"{initial_mc / 1_000_000:.1f}M"
@@ -181,19 +187,18 @@ async def growthcheck():
 
             # Check notification threshold
             last_ratio = last_growth_ratios.get(key, 1.0)
-            next_threshold = int(last_ratio) + INCREMENT_THRESHOLD
-
-            if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and growth_ratio >= next_threshold:
+            if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and math.floor(growth_ratio) >= math.floor(last_ratio) + INCREMENT_THRESHOLD:
                 last_growth_ratios[key] = growth_ratio
                 time_since_added = calculate_time_since(timestamp)
                 initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
                 current_mc_str_md = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
                 emoji = "🚀" if 2 <= growth_ratio < 5 else "🔥" if 5 <= growth_ratio < 10 else "🌙"
                 growth_str = f"**{growth_ratio:.1f}x**"
+                symbol_display = f" - ${symbol}" if symbol else ""
 
                 growth_message = (
                     f"{emoji} {growth_str} | "
-                    f"💹From {initial_mc_str_md} ↗️ **{current_mc_str_md}** within **{time_since_added}**"
+                    f"💹From {initial_mc_str_md} ↗️ {current_mc_str_md} within **{time_since_added}**{symbol_display}"
                 )
 
                 try:
@@ -206,6 +211,8 @@ async def growthcheck():
                     logger.info(f"Sent growth notification for CA {ca} in chat {chat_id}: {growth_message}")
                 except Exception as e:
                     logger.error(f"Failed to send growth notification for CA {ca} in chat {chat_id}: {e}")
+            else:
+                logger.debug(f"Skipped notification for CA {ca}: growth_ratio={growth_ratio:.2f}, last_ratio={last_ratio:.2f}, threshold={GROWTH_THRESHOLD}, next_increment={math.floor(last_ratio) + INCREMENT_THRESHOLD}")
 
             # Log growth for debugging
             profit_percent = ((current_mc - initial_mc) / initial_mc) * 100 if initial_mc != 0 else 0
@@ -373,7 +380,7 @@ class APISessionManager:
                     logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
                     await asyncio.sleep(delay)
                 else:
-                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} CASE1 failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
+                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
             
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed: {str(e)}")
@@ -498,6 +505,7 @@ async def get_gmgn_token_data(mint_address):
         token_data["renounced_freeze_account"] = bool(token_info.get("renounced_freeze_account", 0))
         token_data["contract"] = mint_address
         token_data["name"] = token_info.get("name", "Unknown")
+        token_data["symbol"] = token_info.get("symbol", "")
 
         logger.debug(f"Processed token data for CA {mint_address}: {token_data}")
         return token_data
@@ -519,7 +527,7 @@ async def set_search_text(message: types.Message):
     
     search_text = text
     await message.answer(f"Search text set to: {search_text} ✅")
-    logger.info(f"Search text set to: {search_text}")
+    logger.info INVESTMENT(f"Search text set to: {search_text}")
 
 # Command to test API fetch for a specific CA
 @dp.message(Command(commands=["testca"]))
@@ -610,9 +618,12 @@ async def process_message_with_buttons(message: types.Message):
                 if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
                 else "⚠️ Check Security"
             )
+            symbol = token_data.get('symbol', 'N/A')
+            symbol_display = f"💱 Symbol: ${symbol}" if symbol != 'N/A' else "💱 Symbol: N/A"
             output_text = (
                 f"**Token Data**\n\n"
                 f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
+                f"{symbol_display}\n"
                 f"📍 CA: `{ca}`\n"
                 f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
                 f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
@@ -623,6 +634,7 @@ async def process_message_with_buttons(message: types.Message):
                 f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
                 f"🔒 Security: {security_status}"
             )
+            logger.debug(f"Included symbol '${symbol}' in token data message for CA: {ca}")
 
             # Add to monitored tokens if in VIP channel
             if message.chat.id == VIP_CHAT_ID:
@@ -633,6 +645,7 @@ async def process_message_with_buttons(message: types.Message):
                         chat_id=message.chat.id,
                         initial_mc=initial_mc,
                         token_name=token_data.get("name", "Unknown"),
+                        symbol=token_data.get("symbol", ""),
                         message_id=message.message_id
                     )
                 else:
