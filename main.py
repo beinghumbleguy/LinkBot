@@ -452,7 +452,7 @@ def format_price(price: float) -> str:
     if price == 0:
         return "N/A"
     if price < 0.0001:
-        return f"{price}:.7f}".rstrip('0').rstrip('.')
+        return f"{price:.7f}".rstrip('0').rstrip('.')
     return f"{price:.6f}".rstrip('0').rstrip('.')
 
 # Helper function to format volume
