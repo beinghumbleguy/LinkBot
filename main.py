@@ -141,7 +141,11 @@ async def growthcheck():
         logger.debug(f"Starting growthcheck with monitored_tokens: {len(monitored_tokens)} tokens")
         to_remove = []
 
-        for key, data in monitored_tokens.items():
+        for key in list(monitored_tokens.keys()):
+            data = monitored_tokens.get(key)
+            if not data:
+                continue
+
             ca = data["mint_address"]
             chat_id = data["chat_id"]
             initial_mc = data["initial_mc"]
@@ -590,97 +594,136 @@ async def download_csv(message: types.Message):
 async def process_message_with_buttons(message: types.Message):
     global search_text
     
-    if not search_text:
-        return
-    
     text = message.text.strip()
     logger.debug(f"Processing message: {text}")
-    if search_text.lower() in text.lower():
-        ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
-        if not ca_match:
-            logger.info(f"Search text '{search_text}' found, but no CA in message: {text}")
-            return
-        ca = ca_match.group(0)
-        logger.debug(f"Detected CA: {ca}")
-        
-        token_data = await get_gmgn_token_data(ca)
-        if "error" in token_data:
-            output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
-        else:
-            price = token_data.get('price', 0)
-            price_display = format_price(price) if price != 0 else "N/A"
-            price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
-            price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
-            volume_24h = format_volume(token_data.get('volume_24h', 0))
-            security_status = (
-                f"✅ Mint Renounced\n"
-                f"✅ Freeze Renounced"
-                if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
-                else "⚠️ Check Security"
-            )
-            symbol = token_data.get('symbol', 'N/A')
-            symbol_display = f"💱 Symbol: ${symbol}" if symbol != 'N/A' else "💱 Symbol: N/A"
-            output_text = (
-                f"**Token Data**\n\n"
-                f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
-                f"{symbol_display}\n"
-                f"📍 CA: `{ca}`\n"
-                f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
-                f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
-                f"💰 Price: ${price_display}\n"
-                f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
-                f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
-                f"💸 Volume (24h): ${volume_24h}\n"
-                f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
-                f"🔒 Security: {security_status}"
-            )
-            logger.debug(f"Included symbol '${symbol}' in token data message for CA: {ca}")
+    
+    ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
+    if not ca_match:
+        logger.info(f"No CA found in message: {text}")
+        return
+    ca = ca_match.group(0)
+    logger.debug(f"Detected CA: {ca}")
+    
+    token_data = await get_gmgn_token_data(ca)
+    if "error" in token_data:
+        output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
+    else:
+        price = token_data.get('price', 0)
+        price_display = format_price(price) if price != 0 else "N/A"
+        price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
+        price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
+        volume_24h = format_volume(token_data.get('volume_24h', 0))
+        security_status = (
+            f"✅ Mint Renounced\n"
+            f"✅ Freeze Renounced"
+            if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
+            else "⚠️ Check Security"
+        )
+        symbol = token_data.get('symbol', 'N/A')
+        symbol_display = f"💱 Symbol: ${symbol}" if symbol != 'N/A' else "💱 Symbol: N/A"
+        output_text = (
+            f"**Token Data**\n\n"
+            f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
+            f"{symbol_display}\n"
+            f"📍 CA: `{ca}`\n"
+            f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
+            f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
+            f"💰 Price: ${price_display}\n"
+            f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
+            f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
+            f"💸 Volume (24h): ${volume_24h}\n"
+            f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
+            f"🔒 Security: {security_status}"
+        )
+        logger.debug(f"Included symbol '${symbol}' in token data message for CA: {ca}")
 
-            # Add to monitored tokens if in VIP channel
-            if message.chat.id == VIP_CHAT_ID:
-                initial_mc = token_data.get("market_cap", 0)
-                if initial_mc > 0:
-                    await add_to_monitored_tokens(
-                        mint_address=ca,
-                        chat_id=message.chat.id,
-                        initial_mc=initial_mc,
-                        token_name=token_data.get("name", "Unknown"),
-                        symbol=token_data.get("symbol", ""),
-                        message_id=message.message_id
-                    )
-                else:
-                    logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
+        # Add to monitored tokens if in VIP channel
+        if message.chat.id == VIP_CHAT_ID:
+            initial_mc = token_data.get("market_cap", 0)
+            if initial_mc > 0:
+                await add_to_monitored_tokens(
+                    mint_address=ca,
+                    chat_id=message.chat.id,
+                    initial_mc=initial_mc,
+                    token_name=token_data.get("name", "Unknown"),
+                    symbol=token_data.get("symbol", ""),
+                    message_id=message.message_id
+                )
+            else:
+                logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
-            ]
-        ])
-        
-        if message.chat.type == "channel":
-            await bot.send_message(
-                chat_id=message.chat.id,
-                text=output_text,
-                reply_markup=keyboard,
-                parse_mode="Markdown"
-            )
-        else:
-            await message.reply(
-                text=output_text,
-                reply_markup=keyboard,
-                parse_mode="Markdown",
-                reply_to_message_id=message.message_id
-            )
-        logger.info(f"Added buttons and token info for message containing '{search_text}' and CA: {ca}")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
+        ]
+    ])
+    
+    if message.chat.type == "channel":
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=output_text,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+    else:
+        await message.reply(
+            text=output_text,
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+            reply_to_message_id=message.message_id
+        )
+    logger.info(f"Added buttons and token info for CA: {ca}")
 
 # Handler for messages in groups (message updates)
 @dp.message(F.text)
 async def add_buttons_if_text_found(message: types.Message):
+    global search_text
+    text = message.text.strip()
+    logger.debug(f"Received message in group: {text}")
+
+    # Check for Solana CA
+    ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
+    if not ca_match:
+        logger.debug(f"No CA found in group message: {text}")
+        return
+    ca = ca_match.group(0)
+    logger.debug(f"Detected CA in group message: {ca}")
+
+    # If search_text is set, only process if search_text is in the message
+    if search_text and search_text.lower() not in text.lower():
+        logger.debug(f"Search text '{search_text}' not found in message with CA {ca}, skipping")
+        return
+
+    # Add 3-second delay before processing
+    logger.debug(f"Waiting 3 seconds before processing CA {ca} in group")
+    await asyncio.sleep(3)
+
     await process_message_with_buttons(message)
 
 # Handler for messages in channels (channel_post updates)
 @dp.channel_post(F.text)
 async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
+    global search_text
+    text = channel_post.text.strip()
+    logger.debug(f"Received message in channel: {text}")
+
+    # Check for Solana CA
+    ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
+    if not ca_match:
+        logger.debug(f"No CA found in channel message: {text}")
+        return
+    ca = ca_match.group(0)
+    logger.debug(f"Detected CA in channel message: {ca}")
+
+    # If search_text is set, only process if search_text is in the message
+    if search_text and search_text.lower() not in text.lower():
+        logger.debug(f"Search text '{search_text}' not found in message with CA {ca}, skipping")
+        return
+
+    # Add 3-second delay before processing
+    logger.debug(f"Waiting 3 seconds before processing CA {ca} in channel")
+    await asyncio.sleep(3)
+
     await process_message_with_buttons(channel_post)
 
 # Startup function
