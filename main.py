@@ -452,7 +452,7 @@ def format_price(price: float) -> str:
     if price == 0:
         return "N/A"
     if price < 0.0001:
-        return f"{price:.7f}".rstrip('0').rstrip('.')
+        return f"{price}:.7f}".rstrip('0').rstrip('.')
     return f"{price:.6f}".rstrip('0').rstrip('.')
 
 # Helper function to format volume
@@ -527,7 +527,7 @@ async def set_search_text(message: types.Message):
     
     search_text = text
     await message.answer(f"Search text set to: {search_text} ✅")
-    logger.info INVESTMENT(f"Search text set to: {search_text}")
+    logger.info(f"Search text set to: {search_text}")
 
 # Command to test API fetch for a specific CA
 @dp.message(Command(commands=["testca"]))
