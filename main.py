@@ -50,7 +50,11 @@ last_growth_ratios = {}  # Tracks last notified growth ratio per CA
 
 # Define channel IDs
 VIP_CHAT_ID = -1002625241334  # Lucid Labs VIP channel ID
-CSV_PATH = "/app/data/monitored_tokens.csv"  # Path to store monitored tokens
+PUBLIC_CHANNEL_ID = -1002366446172  # Public channel ID
+CSV_PATH = "/app/data/lucidswans_monitored_tokens.csv"  # Path to store monitored tokens
+
+# Daily report scheduling variable
+DAILY_REPORT_INTERVAL = 900  # Seconds between reports (900 = 15 minutes)
 
 def calculate_time_since(timestamp):
     """Format time difference since timestamp in seconds, minutes, or hours:minutes."""
@@ -130,6 +134,104 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
     else:
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
+async def daily_summary_report():
+    """Generate and post a daily report of top-performing VIP tokens (>= 2.1x growth) to the public channel."""
+    logger.info("Generating daily summary report")
+    current_time = datetime.now(pytz.timezone('America/New_York'))
+    today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_ts = today_start.timestamp()
+    date_str = current_time.strftime("%d/%m/%Y")
+
+    # Filter tokens from today in VIP channel
+    qualifying_tokens = []
+    for key, data in monitored_tokens.items():
+        if data["chat_id"] != VIP_CHAT_ID or data["timestamp"] < today_start_ts:
+            continue  # Skip non-VIP or older tokens
+
+        ca = data["mint_address"]
+        initial_mc = data["initial_mc"]
+        token_data = await get_gmgn_token_data(ca)
+        if "error" in token_data:
+            logger.debug(f"Skipping CA {ca} due to API error: {token_data['error']}")
+            continue
+
+        current_mc = token_data.get("market_cap", 0)
+        if current_mc == 0:
+            logger.debug(f"Skipping CA {ca} due to invalid current_mc: {current_mc}")
+            continue
+
+        growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
+        if growth_ratio >= 2.1:
+            qualifying_tokens.append({
+                "symbol": data["symbol"] or "Unknown",
+                "ca": ca,
+                "growth_ratio": growth_ratio,
+                "token_name": data["token_name"]
+            })
+
+    # Sort tokens by growth ratio (descending)
+    qualifying_tokens.sort(key=lambda x: x["growth_ratio"], reverse=True)
+
+    # Generate report
+    if not qualifying_tokens:
+        report_text = (
+            f"📈 **Top Performing VIP Tokens** 📈\n"
+            f"📅 {date_str}\n\n"
+            f"🔥 No VIP tokens with growth ≥ 2.1x for today! 🔥"
+        )
+    else:
+        report_lines = []
+        for idx, token in enumerate(qualifying_tokens, 1):
+            symbol = f"${token['symbol']}" if token["symbol"] != "Unknown" else token["token_name"]
+            ca = token["ca"]
+            growth_ratio = token["growth_ratio"]
+            pump_fun_url = f"https://pump.fun/coin/{ca}"
+            emoji = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else "🏅"
+            symbol_field = f"[{symbol}]({pump_fun_url})".ljust(10)
+            report_lines.append(
+                f"{emoji} 🟡 {symbol_field} 🚀 **{growth_ratio:.1f}x**"
+            )
+
+        report_text = (
+            f"📈 **Top Performing VIP Tokens** 📈\n"
+            f"📅 {date_str}\n\n"
+            f"🔥 See the biggest gains from our VIP channels! 🔥\n\n"
+            + "\n\n".join(report_lines)
+        )
+
+    # Add Join VIP button
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌟🚀 Join VIP 🚀🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
+    ])
+
+    # Post and pin report
+    try:
+        message = await bot.send_message(
+            chat_id=PUBLIC_CHANNEL_ID,
+            text=report_text,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+            reply_markup=keyboard
+        )
+        logger.info(f"Posted daily summary report to public channel {PUBLIC_CHANNEL_ID}, message_id={message.message_id}")
+
+        await bot.pin_chat_message(
+            chat_id=PUBLIC_CHANNEL_ID,
+            message_id=message.message_id,
+            disable_notification=True
+        )
+        logger.info(f"Pinned daily summary report message {message.message_id} in public channel {PUBLIC_CHANNEL_ID}")
+    except Exception as e:
+        logger.error(f"Failed to post or pin daily summary report: {str(e)}")
+
+async def schedule_daily_report():
+    """Schedule the daily report to run every DAILY_REPORT_INTERVAL seconds."""
+    logger.info(f"Scheduling daily report to run every {DAILY_REPORT_INTERVAL} seconds")
+    while True:
+        logger.debug("Triggering daily summary report")
+        await daily_summary_report()
+        await asyncio.sleep(DAILY_REPORT_INTERVAL)
+
 async def growthcheck():
     """Periodically check market cap growth and notify for milestones (1.5x, 2.0x, etc.) in VIP channel."""
     while True:
@@ -177,7 +279,7 @@ async def growthcheck():
 
             current_mc = token_data.get("market_cap", 0)
             if current_mc == 0:
-                logger.debug(f"Removing CA {ca} due to invalid current_mc: {current_mc}")
+                logger.debug(f"Skipping CA {ca} due to invalid current_mc: {current_mc}")
                 to_remove.append(key)
                 continue
 
@@ -582,10 +684,10 @@ async def download_csv(message: types.Message):
         async with aiofiles.open(CSV_PATH, mode='rb') as file:
             await bot.send_document(
                 chat_id=message.chat.id,
-                document=types.FSInputFile(CSV_PATH, filename="monitored_tokens.csv"),
+                document=types.FSInputFile(CSV_PATH, filename="lucidswans_monitored_tokens.csv"),
                 caption="Here is the monitored tokens CSV file."
             )
-        logger.info(f"Sent monitored_tokens.csv to chat {message.chat.id}")
+        logger.info(f"Sent lucidswans_monitored_tokens.csv to chat {message.chat.id}")
     except Exception as e:
         await message.answer(f"⚠️ Error sending CSV file: {str(e)}")
         logger.error(f"Failed to send CSV file to chat {message.chat.id}: {str(e)}")
@@ -727,9 +829,10 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
     await process_message_with_buttons(channel_post)
 
 # Startup function
-async def on_startup():
+async def(labels):
     load_monitored_tokens()  # Load existing tokens
     asyncio.create_task(growthcheck())  # Start growth check
+    asyncio.create_task(schedule_daily_report())  # Start daily report scheduler
     logger.info("Button Bot started")
 
 # Main function to start the bot
