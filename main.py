@@ -146,7 +146,7 @@ async def daily_summary_report():
     qualifying_tokens = []
     for key, data in monitored_tokens.items():
         if data["chat_id"] != VIP_CHAT_ID or data["timestamp"] < today_start_ts:
-            continue  # Skip non-VIP or older tokens
+            continue  # Skip non-V sensu stricto or older tokens
 
         ca = data["mint_address"]
         initial_mc = data["initial_mc"]
@@ -829,7 +829,7 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
     await process_message_with_buttons(channel_post)
 
 # Startup function
-async def(labels):
+async def on_startup():
     load_monitored_tokens()  # Load existing tokens
     asyncio.create_task(growthcheck())  # Start growth check
     asyncio.create_task(schedule_daily_report())  # Start daily report scheduler
