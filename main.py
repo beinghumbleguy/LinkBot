@@ -54,7 +54,7 @@ PUBLIC_CHANNEL_ID = -1002366446172  # Public channel ID
 CSV_PATH = "/app/data/lucidswans_monitored_tokens.csv"  # Path to store monitored tokens
 
 # Daily report scheduling variable
-DAILY_REPORT_INTERVAL = 900  # Seconds between reports (900 = 15 minutes)
+DAILY_REPORT_INTERVAL = 3600  # Seconds between reports (900 = 15 minutes)
 
 def calculate_time_since(timestamp):
     """Format time difference since timestamp in seconds, minutes, or hours:minutes."""
