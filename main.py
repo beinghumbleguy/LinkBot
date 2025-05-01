@@ -55,7 +55,7 @@ PUBLIC_CHANNEL_ID = -1002366446172  # Public channel ID
 CSV_PATH = "/app/data/lucidswans_monitored_tokens.csv"  # Path to store monitored tokens
 
 # Daily report scheduling variable
-DAILY_REPORT_INTERVAL = 900  # Seconds between reports (900 = 15 minutes)
+DAILY_REPORT_INTERVAL = 14400  # Seconds between reports (14400 = 4 hours)
 
 def calculate_time_since(timestamp):
     """Format time difference since timestamp in seconds, minutes, or hours:minutes."""
@@ -290,9 +290,6 @@ async def growthcheck():
             growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
             logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
 
-            # Update last_growth_ratios for all valid tokens
-            last_growth_ratios[key] = growth_ratio
-
             # Define market cap strings for debug logging
             initial_mc_str = f"{initial_mc / 1000:.1f}K" if initial_mc < 1_000_000 else f"{initial_mc / 1_000_000:.1f}M"
             current_mc_str = f"{current_mc / 1000:.1f}K" if current_mc < 1_000_000 else f"{current_mc / 1_000_000:.1f}M"
@@ -300,7 +297,8 @@ async def growthcheck():
             # Check notification threshold
             last_ratio = last_growth_ratios.get(key, 1.0)
             if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and math.floor(growth_ratio) >= math.floor(last_ratio) + INCREMENT_THRESHOLD:
-                last_growth_ratios[key] = growth_ratio
+                # Update last_growth_ratios only when notifying
+                last_growth_ratios[key] = math.floor(growth_ratio)  # Set to the integer milestone
                 time_since_added = calculate_time_since(timestamp)
                 initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
                 current_mc_str_md = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
@@ -325,6 +323,9 @@ async def growthcheck():
                     logger.error(f"Failed to send growth notification for CA {ca} in chat {chat_id}: {e}")
             else:
                 logger.debug(f"Skipped notification for CA {ca}: growth_ratio={growth_ratio:.2f}, last_ratio={last_ratio:.2f}, threshold={GROWTH_THRESHOLD}, next_increment={math.floor(last_ratio) + INCREMENT_THRESHOLD}")
+
+            # Update last_growth_ratio in CSV for reporting, even if no notification
+            last_growth_ratios[key] = growth_ratio
 
             # Log growth for debugging
             profit_percent = ((current_mc - initial_mc) / initial_mc) * 100 if initial_mc != 0 else 0
