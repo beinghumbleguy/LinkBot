@@ -47,6 +47,7 @@ CHECK_INTERVAL = 30  # Seconds between growth checks
 MONITORING_DURATION = 21600  # 6 hours in seconds
 monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "symbol": str, "message_id": int}}
 last_growth_ratios = {}  # Tracks last notified growth ratio per CA
+csv_lock = asyncio.Lock()  # Lock for CSV writes
 
 # Define channel IDs
 VIP_CHAT_ID = -1002625241334  # Lucid Labs VIP channel ID
@@ -54,7 +55,7 @@ PUBLIC_CHANNEL_ID = -1002366446172  # Public channel ID
 CSV_PATH = "/app/data/lucidswans_monitored_tokens.csv"  # Path to store monitored tokens
 
 # Daily report scheduling variable
-DAILY_REPORT_INTERVAL = 3600  # Seconds between reports (900 = 15 minutes)
+DAILY_REPORT_INTERVAL = 900  # Seconds between reports (900 = 15 minutes)
 
 def calculate_time_since(timestamp):
     """Format time difference since timestamp in seconds, minutes, or hours:minutes."""
@@ -88,32 +89,35 @@ def load_monitored_tokens():
                     "message_id": int(row["message_id"])
                 }
                 last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
+                logger.debug(f"Loaded token {row['mint_address']}: last_growth_ratio={last_growth_ratios[key]}")
             logger.info(f"Loaded {len(monitored_tokens)} tokens from {CSV_PATH}")
         except Exception as e:
             logger.error(f"Failed to load monitored tokens from CSV: {str(e)}")
     else:
         logger.info(f"No existing monitored tokens CSV found at {CSV_PATH}")
 
-def save_monitored_tokens():
-    """Save monitored tokens to CSV."""
-    try:
-        df = pd.DataFrame([
-            {
-                "mint_address": data["mint_address"],
-                "chat_id": data["chat_id"],
-                "initial_mc": data["initial_mc"],
-                "timestamp": data["timestamp"],
-                "token_name": data["token_name"],
-                "symbol": data["symbol"],
-                "message_id": data["message_id"],
-                "last_growth_ratio": last_growth_ratios.get(key, 1.0)
-            }
-            for key, data in monitored_tokens.items()
-        ])
-        df.to_csv(CSV_PATH, index=False)
-        logger.info(f"Saved {len(monitored_tokens)} tokens to {CSV_PATH}")
-    except Exception as e:
-        logger.error(f"Failed to save monitored tokens to CSV: {str(e)}")
+async def save_monitored_tokens():
+    """Save monitored tokens to CSV with lock to prevent concurrent writes."""
+    async with csv_lock:
+        try:
+            df = pd.DataFrame([
+                {
+                    "mint_address": data["mint_address"],
+                    "chat_id": data["chat_id"],
+                    "initial_mc": data["initial_mc"],
+                    "timestamp": data["timestamp"],
+                    "token_name": data["token_name"],
+                    "symbol": data["symbol"],
+                    "message_id": data["message_id"],
+                    "last_growth_ratio": last_growth_ratios.get(key, 1.0)
+                }
+                for key, data in monitored_tokens.items()
+            ])
+            df.to_csv(CSV_PATH, index=False)
+            logger.info(f"Saved {len(monitored_tokens)} tokens to {CSV_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to save monitored tokens to CSV: {str(e)}")
+            raise
 
 async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: float, token_name: str, symbol: str, message_id: int):
     """Add a CA to monitored tokens and save to CSV."""
@@ -129,13 +133,13 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
             "message_id": message_id
         }
         last_growth_ratios[key] = 1.0  # Initialize last notified ratio
-        save_monitored_tokens()
+        await save_monitored_tokens()
         logger.info(f"Added CA {mint_address} to monitored_tokens for chat {chat_id}")
     else:
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
 async def daily_summary_report():
-    """Generate and post a daily report of top-performing VIP tokens (>= 2.1x growth) to the public channel."""
+    """Generate and post a daily report of top 20 VIP tokens (> 2.0x growth) to the public channel."""
     logger.info("Generating daily summary report")
     current_time = datetime.now(pytz.timezone('America/New_York'))
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -146,7 +150,7 @@ async def daily_summary_report():
     qualifying_tokens = []
     for key, data in monitored_tokens.items():
         if data["chat_id"] != VIP_CHAT_ID or data["timestamp"] < today_start_ts:
-            continue  # Skip non-V sensu stricto or older tokens
+            continue  # Skip non-VIP or older tokens
 
         ca = data["mint_address"]
         initial_mc = data["initial_mc"]
@@ -161,7 +165,7 @@ async def daily_summary_report():
             continue
 
         growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
-        if growth_ratio >= 2.1:
+        if growth_ratio > 2.0:
             qualifying_tokens.append({
                 "symbol": data["symbol"] or "Unknown",
                 "ca": ca,
@@ -169,39 +173,38 @@ async def daily_summary_report():
                 "token_name": data["token_name"]
             })
 
-    # Sort tokens by growth ratio (descending)
+    # Sort tokens by growth ratio (descending) and limit to top 20
     qualifying_tokens.sort(key=lambda x: x["growth_ratio"], reverse=True)
+    qualifying_tokens = qualifying_tokens[:20]
+
+    # Skip report if no qualifying tokens
+    if not qualifying_tokens:
+        logger.info("No qualifying tokens for daily report, skipping")
+        return
 
     # Generate report
-    if not qualifying_tokens:
-        report_text = (
-            f"📈 **Top Performing VIP Tokens** 📈\n"
-            f"📅 {date_str}\n\n"
-            f"🔥 No VIP tokens with growth ≥ 2.1x for today! 🔥"
+    report_lines = []
+    for idx, token in enumerate(qualifying_tokens, 1):
+        symbol = f"${token['symbol']}" if token["symbol"] != "Unknown" else token["token_name"]
+        ca = token["ca"]
+        growth_ratio = token["growth_ratio"]
+        pump_fun_url = f"https://pump.fun/coin/{ca}"
+        rank_emoji = "🏆" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else "🏅"
+        prefix = "└" if idx == len(qualifying_tokens) else "├"
+        report_lines.append(
+            f"{prefix}{rank_emoji} 👀 | 🔗 | [{symbol}]({pump_fun_url}) | {growth_ratio:.1f}x"
         )
-    else:
-        report_lines = []
-        for idx, token in enumerate(qualifying_tokens, 1):
-            symbol = f"${token['symbol']}" if token["symbol"] != "Unknown" else token["token_name"]
-            ca = token["ca"]
-            growth_ratio = token["growth_ratio"]
-            pump_fun_url = f"https://pump.fun/coin/{ca}"
-            emoji = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else "🏅"
-            symbol_field = f"[{symbol}]({pump_fun_url})".ljust(10)
-            report_lines.append(
-                f"{emoji} 🟡 {symbol_field} 🚀 **{growth_ratio:.1f}x**"
-            )
 
-        report_text = (
-            f"📈 **Top Performing VIP Tokens** 📈\n"
-            f"📅 {date_str}\n\n"
-            f"🔥 See the biggest gains from our VIP channels! 🔥\n\n"
-            + "\n\n".join(report_lines)
-        )
+    report_text = (
+        f"📈 **Top Performing VIP Tokens** 📈\n"
+        f"📅 {date_str}\n\n"
+        + "\n".join(report_lines) + "\n\n"
+        f"Join our VIP channel for more gains! 💰"
+    )
 
     # Add Join VIP button
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌟🚀 Join VIP 🚀🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
+        [InlineKeyboardButton(text="🌟 Join VIP 🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
     ])
 
     # Post and pin report
@@ -287,6 +290,9 @@ async def growthcheck():
             growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
             logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
 
+            # Update last_growth_ratios for all valid tokens
+            last_growth_ratios[key] = growth_ratio
+
             # Define market cap strings for debug logging
             initial_mc_str = f"{initial_mc / 1000:.1f}K" if initial_mc < 1_000_000 else f"{initial_mc / 1_000_000:.1f}M"
             current_mc_str = f"{current_mc / 1000:.1f}K" if current_mc < 1_000_000 else f"{current_mc / 1_000_000:.1f}M"
@@ -329,7 +335,7 @@ async def growthcheck():
             monitored_tokens.pop(key, None)
             last_growth_ratios.pop(key, None)
         if to_remove:
-            save_monitored_tokens()
+            await save_monitored_tokens()
             logger.info(f"Removed {len(to_remove)} expired tokens")
 
         await asyncio.sleep(CHECK_INTERVAL)
