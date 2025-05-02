@@ -72,24 +72,39 @@ def calculate_time_since(timestamp):
     return f"{hours}h:{remaining_minutes:02d}m"
 
 def load_monitored_tokens():
-    """Load monitored tokens from CSV on startup."""
+    """Load monitored tokens from CSV on startup with validation."""
     global monitored_tokens, last_growth_ratios
     if os.path.exists(CSV_PATH):
         try:
             df = pd.read_csv(CSV_PATH)
-            for _, row in df.iterrows():
+            required_columns = ["mint_address", "chat_id", "initial_mc", "timestamp", "token_name", "message_id"]
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                logger.error(f"CSV missing required columns: {missing_columns}")
+                return
+
+            for idx, row in df.iterrows():
+                # Validate required fields
+                if pd.isna(row["mint_address"]) or pd.isna(row["chat_id"]) or pd.isna(row["initial_mc"]) or pd.isna(row["timestamp"]) or pd.isna(row["message_id"]):
+                    logger.warning(f"Skipping invalid CSV row {idx}: missing required fields {row.to_dict()}")
+                    continue
+
                 key = f"{row['mint_address']}:{row['chat_id']}"
-                monitored_tokens[key] = {
-                    "mint_address": row["mint_address"],
-                    "chat_id": int(row["chat_id"]),
-                    "initial_mc": float(row["initial_mc"]),
-                    "timestamp": float(row["timestamp"]),
-                    "token_name": row["token_name"],
-                    "symbol": row.get("symbol", ""),  # Default to empty string if symbol missing
-                    "message_id": int(row["message_id"])
-                }
-                last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
-                logger.debug(f"Loaded token {row['mint_address']}: last_growth_ratio={last_growth_ratios[key]}")
+                try:
+                    monitored_tokens[key] = {
+                        "mint_address": str(row["mint_address"]),
+                        "chat_id": int(row["chat_id"]),
+                        "initial_mc": float(row["initial_mc"]),
+                        "timestamp": float(row["timestamp"]),
+                        "token_name": str(row["token_name"]),
+                        "symbol": str(row.get("symbol", "")),  # Default to empty string
+                        "message_id": int(row["message_id"])
+                    }
+                    last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
+                    logger.debug(f"Loaded token {row['mint_address']}: last_growth_ratio={last_growth_ratios[key]}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Skipping invalid CSV row {idx}: invalid data types {row.to_dict()}, error: {str(e)}")
+                    continue
             logger.info(f"Loaded {len(monitored_tokens)} tokens from {CSV_PATH}")
         except Exception as e:
             logger.error(f"Failed to load monitored tokens from CSV: {str(e)}")
@@ -120,7 +135,11 @@ async def save_monitored_tokens():
             raise
 
 async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: float, token_name: str, symbol: str, message_id: int):
-    """Add a CA to monitored tokens and save to CSV."""
+    """Add a CA to monitored tokens and save to CSV, validate initial_mc."""
+    if initial_mc <= 0:
+        logger.warning(f"Skipping CA {mint_address} for monitoring: invalid initial_mc={initial_mc}")
+        return
+
     key = f"{mint_address}:{chat_id}"
     if key not in monitored_tokens:
         monitored_tokens[key] = {
@@ -134,37 +153,55 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
         }
         last_growth_ratios[key] = 1.0  # Initialize last notified ratio
         await save_monitored_tokens()
-        logger.info(f"Added CA {mint_address} to monitored_tokens for chat {chat_id}")
+        logger.info(f"Added CA {mint_address} to monitored_tokens for chat {chat_id}, initial_mc={initial_mc}")
     else:
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
 async def daily_summary_report():
-    """Generate and post a daily report of top 20 VIP tokens (> 2.0x growth) to the public channel."""
+    """Generate and post a daily report of top 20 VIP tokens (> 2.0x growth) added today to the public channel."""
     logger.info("Generating daily summary report")
     current_time = datetime.now(pytz.timezone('America/New_York'))
     today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     today_start_ts = today_start.timestamp()
     date_str = current_time.strftime("%d/%m/%Y")
+    logger.debug(f"Report for date {date_str}, today_start_ts={today_start_ts} ({today_start})")
 
     # Filter tokens from today in VIP channel
     qualifying_tokens = []
     for key, data in monitored_tokens.items():
-        if data["chat_id"] != VIP_CHAT_ID or data["timestamp"] < today_start_ts:
-            continue  # Skip non-VIP or older tokens
-
         ca = data["mint_address"]
+        logger.debug(f"Evaluating CA {ca}: chat_id={data['chat_id']}, timestamp={data['timestamp']} ({datetime.fromtimestamp(data['timestamp'], pytz.timezone('America/New_York'))}), initial_mc={data['initial_mc']:.2f}")
+
+        # Skip non-VIP or non-today tokens
+        if data["chat_id"] != VIP_CHAT_ID:
+            logger.debug(f"Skipping CA {ca}: not in VIP channel (chat_id={data['chat_id']})")
+            continue
+        if data["timestamp"] < today_start_ts:
+            logger.debug(f"Skipping CA {ca}: not added today (timestamp={data['timestamp']} < today_start_ts={today_start_ts})")
+            continue
+
         initial_mc = data["initial_mc"]
-        token_data = await get_gmgn_token_data(ca)
+        # Retry API call up to 5 times
+        token_data = None
+        for attempt in range(5):
+            token_data = await get_gmgn_token_data(ca)
+            if "error" not in token_data:
+                break
+            logger.debug(f"Attempt {attempt + 1} failed for CA {ca}: {token_data['error']}")
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+
         if "error" in token_data:
-            logger.debug(f"Skipping CA {ca} due to API error: {token_data['error']}")
+            logger.warning(f"Skipping CA {ca} after 5 attempts: {token_data['error']}, token_data={data}")
             continue
 
         current_mc = token_data.get("market_cap", 0)
         if current_mc == 0:
-            logger.debug(f"Skipping CA {ca} due to invalid current_mc: {current_mc}")
+            logger.warning(f"Skipping CA {ca}: invalid current_mc={current_mc}, token_data={data}")
             continue
 
         growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
+        logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
+
         if growth_ratio > 2.0:
             qualifying_tokens.append({
                 "symbol": data["symbol"] or "Unknown",
@@ -172,10 +209,14 @@ async def daily_summary_report():
                 "growth_ratio": growth_ratio,
                 "token_name": data["token_name"]
             })
+            logger.debug(f"Added CA {ca} to report: growth_ratio={growth_ratio:.2f}x")
+        else:
+            logger.debug(f"Skipping CA {ca}: growth_ratio={growth_ratio:.2f}x <= 2.0")
 
     # Sort tokens by growth ratio (descending) and limit to top 20
     qualifying_tokens.sort(key=lambda x: x["growth_ratio"], reverse=True)
     qualifying_tokens = qualifying_tokens[:20]
+    logger.info(f"Found {len(qualifying_tokens)} qualifying tokens for report")
 
     # Skip report if no qualifying tokens
     if not qualifying_tokens:
