@@ -46,7 +46,7 @@ INCREMENT_THRESHOLD = 1.0  # Notify at increments of 1.0 (e.g., 1.5x, 2.0x, 3.0x
 CHECK_INTERVAL = 30  # Seconds between growth checks
 MONITORING_DURATION = 21600  # 6 hours in seconds
 monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "symbol": str, "message_id": int}}
-last_growth_ratios = {}  # Tracks last notified growth ratio per CA
+last_growth_ratios = {}  # Tracks last notified or peak growth ratio per CA
 csv_lock = asyncio.Lock()  # Lock for CSV writes
 
 # Define channel IDs
@@ -236,7 +236,7 @@ async def schedule_daily_report():
         await asyncio.sleep(DAILY_REPORT_INTERVAL)
 
 async def growthcheck():
-    """Periodically check market cap growth and notify for milestones (1.5x, 2.0x, etc.) in VIP channel."""
+    """Periodically check market cap growth and notify for milestones (1.5x, 2.0x, 3.0x, etc.) in VIP channel."""
     while True:
         if not monitored_tokens:
             logger.debug("No tokens to monitor, skipping growth check")
@@ -296,9 +296,12 @@ async def growthcheck():
 
             # Check notification threshold
             last_ratio = last_growth_ratios.get(key, 1.0)
-            if growth_notifications_enabled and growth_ratio >= GROWTH_THRESHOLD and math.floor(growth_ratio) >= math.floor(last_ratio) + INCREMENT_THRESHOLD:
+            if (growth_notifications_enabled and 
+                growth_ratio >= GROWTH_THRESHOLD and 
+                growth_ratio >= last_ratio + INCREMENT_THRESHOLD and 
+                math.floor(growth_ratio) > math.floor(last_ratio)):
                 # Update last_growth_ratios only when notifying
-                last_growth_ratios[key] = math.floor(growth_ratio)  # Set to the integer milestone
+                last_growth_ratios[key] = growth_ratio  # Set to exact notified ratio
                 time_since_added = calculate_time_since(timestamp)
                 initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
                 current_mc_str_md = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
@@ -322,10 +325,11 @@ async def growthcheck():
                 except Exception as e:
                     logger.error(f"Failed to send growth notification for CA {ca} in chat {chat_id}: {e}")
             else:
-                logger.debug(f"Skipped notification for CA {ca}: growth_ratio={growth_ratio:.2f}, last_ratio={last_ratio:.2f}, threshold={GROWTH_THRESHOLD}, next_increment={math.floor(last_ratio) + INCREMENT_THRESHOLD}")
+                logger.debug(f"Skipped notification for CA {ca}: growth_ratio={growth_ratio:.2f}, last_ratio={last_ratio:.2f}, threshold={GROWTH_THRESHOLD}, next_increment={last_ratio + INCREMENT_THRESHOLD}")
 
-            # Update last_growth_ratio in CSV for reporting, even if no notification
-            last_growth_ratios[key] = growth_ratio
+            # Update last_growth_ratio in CSV only for new peak
+            if growth_ratio > last_growth_ratios.get(key, 1.0):
+                last_growth_ratios[key] = growth_ratio  # Update CSV only for new peak
 
             # Log growth for debugging
             profit_percent = ((current_mc - initial_mc) / initial_mc) * 100 if initial_mc != 0 else 0
