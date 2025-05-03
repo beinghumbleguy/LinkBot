@@ -39,14 +39,14 @@ dp = Dispatcher()
 # Store the text to search for (in memory for simplicity)
 search_text = None
 
-# Growth check variables (matching Humble bot)
+# Growth check variables
 growth_notifications_enabled = True
 GROWTH_THRESHOLD = 1.5  # Notify when growth reaches 1.5x
 INCREMENT_THRESHOLD = 1.0  # Notify at increments of 1.0 (e.g., 1.5x, 2.0x, 3.0x)
 CHECK_INTERVAL = 30  # Seconds between growth checks
 MONITORING_DURATION = 21600  # 6 hours in seconds
 monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "symbol": str, "message_id": int}}
-last_growth_ratios = {}  # Tracks last notified or peak growth ratio per CA
+last_growth_ratios = {}  # Tracks last notified growth ratio per CA
 csv_lock = asyncio.Lock()  # Lock for CSV writes
 
 # Define channel IDs
@@ -84,7 +84,6 @@ def load_monitored_tokens():
                 return
 
             for idx, row in df.iterrows():
-                # Validate required fields
                 if pd.isna(row["mint_address"]) or pd.isna(row["chat_id"]) or pd.isna(row["initial_mc"]) or pd.isna(row["timestamp"]) or pd.isna(row["message_id"]):
                     logger.warning(f"Skipping invalid CSV row {idx}: missing required fields {row.to_dict()}")
                     continue
@@ -97,7 +96,7 @@ def load_monitored_tokens():
                         "initial_mc": float(row["initial_mc"]),
                         "timestamp": float(row["timestamp"]),
                         "token_name": str(row["token_name"]),
-                        "symbol": str(row.get("symbol", "")),  # Default to empty string
+                        "symbol": str(row.get("symbol", "")),
                         "message_id": int(row["message_id"])
                     }
                     last_growth_ratios[key] = float(row.get("last_growth_ratio", 1.0))
@@ -166,7 +165,6 @@ async def generate_growth_report(report_type: str = "daily"):
     date_str = current_time.strftime("%d/%m/%Y")
     logger.debug(f"Report for date {date_str}, today_start_ts={today_start_ts} ({today_start})")
 
-    # Filter tokens from today in VIP channel
     qualifying_tokens = []
     total_tokens_evaluated = 0
     logger.debug(f"Evaluating {len(monitored_tokens)} tokens in monitored_tokens")
@@ -177,30 +175,26 @@ async def generate_growth_report(report_type: str = "daily"):
         token_time = datetime.fromtimestamp(data["timestamp"], pytz.timezone('America/New_York'))
         logger.debug(f"Evaluating CA {ca}: chat_id={data['chat_id']}, timestamp={data['timestamp']} ({token_time}), initial_mc={data['initial_mc']:.2f}")
 
-        # Skip non-VIP tokens
         if data["chat_id"] != VIP_CHAT_ID:
             logger.debug(f"Skipping CA {ca}: not in VIP channel (chat_id={data['chat_id']} != {VIP_CHAT_ID})")
             continue
 
-        # Skip tokens not added today
         if data["timestamp"] < today_start_ts:
             logger.debug(f"Skipping CA {ca}: not added today (timestamp={data['timestamp']} ({token_time}) < today_start_ts={today_start_ts} ({today_start}))")
             continue
 
-        # Validate initial_mc
         initial_mc = data["initial_mc"]
         if initial_mc <= 0:
             logger.warning(f"Skipping CA {ca}: invalid initial_mc={initial_mc}")
             continue
 
-        # Retry API call up to 5 times
         token_data = None
         for attempt in range(5):
             token_data = await get_gmgn_token_data(ca)
             if "error" not in token_data:
                 break
             logger.debug(f"Attempt {attempt + 1} failed for CA {ca}: {token_data['error']}")
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            await asyncio.sleep(2 ** attempt)
 
         if "error" in token_data:
             logger.warning(f"Skipping CA {ca} after 5 attempts: {token_data['error']}, token_data={data}")
@@ -225,20 +219,16 @@ async def generate_growth_report(report_type: str = "daily"):
         else:
             logger.debug(f"Skipping CA {ca}: growth_ratio={growth_ratio:.2f}x <= 2.0")
 
-    # Log evaluation summary
     logger.info(f"Evaluated {total_tokens_evaluated} tokens, found {len(qualifying_tokens)} qualifying tokens for {report_type} report")
 
-    # Sort tokens by growth ratio (descending) and limit to top 20
     qualifying_tokens.sort(key=lambda x: x["growth_ratio"], reverse=True)
     qualifying_tokens = qualifying_tokens[:20]
     logger.info(f"Selected top {len(qualifying_tokens)} qualifying tokens for {report_type} report")
 
-    # Skip report if no qualifying tokens
     if not qualifying_tokens:
         logger.info(f"No qualifying tokens for {report_type} report, skipping")
         return None, None
 
-    # Generate report
     report_lines = []
     for idx, token in enumerate(qualifying_tokens, 1):
         symbol = f"${token['symbol']}" if token["symbol"] != "Unknown" else token["token_name"]
@@ -258,7 +248,6 @@ async def generate_growth_report(report_type: str = "daily"):
         f"Join our VIP channel for more gains! 💰"
     )
 
-    # Create Join VIP button
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌟 Join VIP 🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
     ])
@@ -266,13 +255,12 @@ async def generate_growth_report(report_type: str = "daily"):
     return report_text, keyboard
 
 async def daily_summary_report():
-    """Generate and post a daily report of top 20 VIP tokens (> 2.0x growth) added today to the public channel."""
+    """Generate and post a daily report of top 20 VIP tokens (> 2.0x growth) added today."""
     logger.debug("Triggering daily summary report")
     report_text, keyboard = await generate_growth_report(report_type="daily")
     if not report_text:
         return
 
-    # Post and pin report
     try:
         message = await bot.send_message(
             chat_id=PUBLIC_CHANNEL_ID,
@@ -306,7 +294,6 @@ async def on_demand_growth_report(message: types.Message):
     user_id = message.from_user.id
     logger.info(f"Received /growthreport command from user {user_id} in chat {chat_id}")
 
-    # Check if user is an admin in VIP or public channel
     is_admin = False
     try:
         for target_chat_id in [VIP_CHAT_ID, PUBLIC_CHANNEL_ID]:
@@ -326,7 +313,6 @@ async def on_demand_growth_report(message: types.Message):
         await message.answer("⚠️ You must be an admin in the VIP or public channel to use this command.")
         return
 
-    # Generate and post on-demand report
     logger.debug("Triggering on-demand growth report")
     report_text, keyboard = await generate_growth_report(report_type="on-demand")
     if not report_text:
@@ -334,7 +320,6 @@ async def on_demand_growth_report(message: types.Message):
         logger.info("No qualifying tokens for on-demand report, notified user")
         return
 
-    # Post and pin report to public channel
     try:
         report_message = await bot.send_message(
             chat_id=PUBLIC_CHANNEL_ID,
@@ -367,7 +352,7 @@ async def growthcheck():
 
         logger.debug(f"Starting growthcheck with monitored_tokens: {len(monitored_tokens)} tokens")
         to_remove = []
-        updated_tokens = False  # Flag to track if any last_growth_ratio was updated
+        updated_tokens = False
 
         for key in list(monitored_tokens.keys()):
             data = monitored_tokens.get(key)
@@ -382,12 +367,10 @@ async def growthcheck():
             message_id = data["message_id"]
             timestamp = data["timestamp"]
 
-            # Only process VIP channel
             if chat_id != VIP_CHAT_ID:
                 logger.debug(f"Skipping CA {ca} in chat {chat_id} (not VIP)")
                 continue
 
-            # Check if monitoring duration exceeded
             current_time = datetime.now(pytz.timezone('America/New_York'))
             token_time = datetime.fromtimestamp(timestamp, pytz.timezone('America/New_York'))
             time_diff = (current_time - token_time).total_seconds()
@@ -396,7 +379,6 @@ async def growthcheck():
                 to_remove.append(key)
                 continue
 
-            # Fetch current market cap
             token_data = await get_gmgn_token_data(ca)
             if "error" in token_data:
                 logger.debug(f"Removing CA {ca} due to API error: {token_data['error']}")
@@ -409,29 +391,21 @@ async def growthcheck():
                 to_remove.append(key)
                 continue
 
-            # Calculate growth ratio
             growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
             logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
 
-            # Define market cap strings for debug logging
             initial_mc_str = f"{initial_mc / 1000:.1f}K" if initial_mc < 1_000_000 else f"{initial_mc / 1_000_000:.1f}M"
             current_mc_str = f"{current_mc / 1000:.1f}K" if current_mc < 1_000_000 else f"{current_mc / 1_000_000:.1f}M"
 
-            # Update last_growth_ratio if growth_ratio is higher
             last_ratio = last_growth_ratios.get(key, 1.0)
-            if growth_ratio > last_ratio:
-                last_growth_ratios[key] = growth_ratio
-                updated_tokens = True
-                logger.debug(f"Updated last_growth_ratio for CA {ca} to {growth_ratio:.2f}x (previous: {last_ratio:.2f}x)")
-
-            # Check notification threshold
+            next_increment = last_ratio + INCREMENT_THRESHOLD
             if (growth_notifications_enabled and 
                 growth_ratio >= GROWTH_THRESHOLD and 
-                growth_ratio >= last_ratio + INCREMENT_THRESHOLD and 
+                growth_ratio >= next_increment and 
                 math.floor(growth_ratio) > math.floor(last_ratio)):
-                # Update last_growth_ratios only when notifying
-                last_growth_ratios[key] = growth_ratio  # Set to exact notified ratio
+                last_growth_ratios[key] = growth_ratio
                 updated_tokens = True
+                logger.info(f"Updated last_growth_ratio for CA {ca} to {growth_ratio:.2f}x (previous: {last_ratio:.2f}x) due to notification")
                 time_since_added = calculate_time_since(timestamp)
                 initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
                 current_mc_str_md = f"**{current_mc / 1000:.1f}K**" if current_mc < 1_000_000 else f"**{current_mc / 1_000_000:.1f}M**"
@@ -455,34 +429,40 @@ async def growthcheck():
                 except Exception as e:
                     logger.error(f"Failed to send growth notification for CA {ca} in chat {chat_id}: {e}")
             else:
-                logger.debug(f"Skipped notification for CA {ca}: growth_ratio={growth_ratio:.2f}, last_ratio={last_ratio:.2f}, threshold={GROWTH_THRESHOLD}, next_increment={last_ratio + INCREMENT_THRESHOLD}")
+                skip_reasons = []
+                if not growth_notifications_enabled:
+                    skip_reasons.append("notifications disabled")
+                if growth_ratio < GROWTH_THRESHOLD:
+                    skip_reasons.append(f"growth_ratio={growth_ratio:.2f} < threshold={GROWTH_THRESHOLD}")
+                if growth_ratio < next_increment:
+                    skip_reasons.append(f"growth_ratio={growth_ratio:.2f} < last_ratio={last_ratio:.2f} + increment={INCREMENT_THRESHOLD}")
+                if math.floor(growth_ratio) <= math.floor(last_ratio):
+                    skip_reasons.append(f"floor(growth_ratio)={math.floor(growth_ratio)} <= floor(last_ratio)={math.floor(last_ratio)}")
+                logger.debug(f"Skipped notification for CA {ca}: {', '.join(skip_reasons)}, threshold={GROWTH_THRESHOLD}, next_increment={next_increment:.2f}")
 
-            # Log growth for debugging
             profit_percent = ((current_mc - initial_mc) / initial_mc) * 100 if initial_mc != 0 else 0
             logger.debug(f"CA {ca}: Initial MC={initial_mc_str}, Current MC={current_mc_str}, Growth={profit_percent:.2f}%")
 
-        # Remove expired or errored tokens
         for key in to_remove:
             monitored_tokens.pop(key, None)
             last_growth_ratios.pop(key, None)
-            updated_tokens = True  # Trigger CSV save for removals
+            updated_tokens = True
+            logger.info(f"Removed token {key} from monitoring")
         if to_remove:
             logger.info(f"Removed {len(to_remove)} expired tokens")
 
-        # Save CSV if any last_growth_ratio was updated or tokens were removed
         if updated_tokens:
             await save_monitored_tokens()
             logger.info(f"Saved CSV after updating last_growth_ratio or removing tokens")
 
         await asyncio.sleep(CHECK_INTERVAL)
 
-# API Session Manager for fetching token data
 class APISessionManager:
     def __init__(self):
         self.session = None
         self._session_created_at = 0
         self._session_requests = 0
-        self._session_max_age = 3600  # 1 hour
+        self._session_max_age = 3600
         self._session_max_requests = 100
         self.max_retries = 5
         self.retry_delay = 2
@@ -682,10 +662,8 @@ class APISessionManager:
         logger.error(f"Failed to fetch data for CA {mint_address} after {self.max_retries} attempts")
         return {"error": f"Failed to fetch data for CA {mint_address} after retries"}
 
-# Initialize the API session manager
 api_session_manager = APISessionManager()
 
-# Helper function to format market cap
 def format_market_cap(market_cap: float) -> str:
     if market_cap >= 1_000_000:
         return f"{market_cap / 1_000_000:.2f}M"
@@ -695,7 +673,6 @@ def format_market_cap(market_cap: float) -> str:
         return f"{market_cap:.2f}"
     return "N/A"
 
-# Helper function to format price
 def format_price(price: float) -> str:
     if price == 0:
         return "N/A"
@@ -703,7 +680,6 @@ def format_price(price: float) -> str:
         return f"{price:.7f}".rstrip('0').rstrip('.')
     return f"{price:.6f}".rstrip('0').rstrip('.')
 
-# Helper function to format volume
 def format_volume(volume: float) -> str:
     if volume >= 1_000_000:
         return f"{volume / 1_000_000:.2f}M"
@@ -713,14 +689,12 @@ def format_volume(volume: float) -> str:
         return f"{volume:.2f}"
     return "N/A"
 
-# Helper function to calculate percentage change
 def calculate_percentage_change(current: float, previous: float) -> str:
     if previous == 0 or current == 0:
         return "N/A"
     change = ((current - previous) / previous) * 100
-    return f"{change:+.2f}%"  # + for positive, - for negative
+    return f"{change:+.2f}%"
 
-# Function to fetch token data
 async def get_gmgn_token_data(mint_address):
     token_data_raw = await api_session_manager.fetch_token_data(mint_address)
     logger.debug(f"Received raw token data for CA {mint_address}: {token_data_raw}")
@@ -762,7 +736,6 @@ async def get_gmgn_token_data(mint_address):
         logger.error(f"Error processing API response for CA {mint_address}: {str(e)}")
         return {"error": f"Network or parsing error for CA {mint_address}: {str(e)}"}
 
-# Command to set the text to search for
 @dp.message(Command(commands=["settext"]))
 async def set_search_text(message: types.Message):
     global search_text
@@ -777,7 +750,6 @@ async def set_search_text(message: types.Message):
     await message.answer(f"Search text set to: {search_text} ✅")
     logger.info(f"Search text set to: {search_text}")
 
-# Command to test API fetch for a specific CA
 @dp.message(Command(commands=["testca"]))
 async def test_ca(message: types.Message):
     ca = message.text.replace('/testca', '').strip()
@@ -800,7 +772,6 @@ async def test_ca(message: types.Message):
         await message.answer(output_text, parse_mode="Markdown")
     logger.info(f"Tested API fetch for CA: {ca}")
 
-# Command to debug chat and user IDs
 @dp.message(Command(commands=["debug"]))
 async def debug_info(message: types.Message):
     user = message.from_user
@@ -813,7 +784,6 @@ async def debug_info(message: types.Message):
         parse_mode="Markdown"
     )
 
-# Command to download monitored tokens CSV
 @dp.message(Command(commands=["downloadcsv"]))
 async def download_csv(message: types.Message):
     logger.info(f"Received /downloadcsv command from user {message.from_user.id} in chat {message.chat.id}")
@@ -834,7 +804,6 @@ async def download_csv(message: types.Message):
         await message.answer(f"⚠️ Error sending CSV file: {str(e)}")
         logger.error(f"Failed to send CSV file to chat {message.chat.id}: {str(e)}")
 
-# Function to process messages (used for both groups and channels)
 async def process_message_with_buttons(message: types.Message):
     global search_text
     
@@ -881,7 +850,6 @@ async def process_message_with_buttons(message: types.Message):
         )
         logger.debug(f"Included symbol '${symbol}' in token data message for CA: {ca}")
 
-        # Add to monitored tokens if in VIP channel
         if message.chat.id == VIP_CHAT_ID:
             initial_mc = token_data.get("market_cap", 0)
             if initial_mc > 0:
@@ -918,14 +886,12 @@ async def process_message_with_buttons(message: types.Message):
         )
     logger.info(f"Added buttons and token info for CA: {ca}")
 
-# Handler for messages in groups (message updates)
 @dp.message(F.text)
 async def add_buttons_if_text_found(message: types.Message):
     global search_text
     text = message.text.strip()
     logger.debug(f"Received message in group: {text}")
 
-    # Check for Solana CA
     ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
     if not ca_match:
         logger.debug(f"No CA found in group message: {text}")
@@ -933,25 +899,21 @@ async def add_buttons_if_text_found(message: types.Message):
     ca = ca_match.group(0)
     logger.debug(f"Detected CA in group message: {ca}")
 
-    # If search_text is set, only process if search_text is in the message
     if search_text and search_text.lower() not in text.lower():
         logger.debug(f"Search text '{search_text}' not found in message with CA {ca}, skipping")
         return
 
-    # Add 3-second delay before processing
     logger.debug(f"Waiting 3 seconds before processing CA {ca} in group")
     await asyncio.sleep(3)
 
     await process_message_with_buttons(message)
 
-# Handler for messages in channels (channel_post updates)
 @dp.channel_post(F.text)
 async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
     global search_text
     text = channel_post.text.strip()
     logger.debug(f"Received message in channel: {text}")
 
-    # Check for Solana CA
     ca_match = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{43,44}\b', text)
     if not ca_match:
         logger.debug(f"No CA found in channel message: {text}")
@@ -959,25 +921,21 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
     ca = ca_match.group(0)
     logger.debug(f"Detected CA in channel message: {ca}")
 
-    # If search_text is set, only process if search_text is in the message
     if search_text and search_text.lower() not in text.lower():
         logger.debug(f"Search text '{search_text}' not found in message with CA {ca}, skipping")
         return
 
-    # Add 3-second delay before processing
     logger.debug(f"Waiting 3 seconds before processing CA {ca} in channel")
     await asyncio.sleep(3)
 
     await process_message_with_buttons(channel_post)
 
-# Startup function
 async def on_startup():
-    load_monitored_tokens()  # Load existing tokens
-    asyncio.create_task(growthcheck())  # Start growth check
-    asyncio.create_task(schedule_daily_report())  # Start daily report scheduler
+    load_monitored_tokens()
+    asyncio.create_task(growthcheck())
+    asyncio.create_task(schedule_daily_report())
     logger.info("Button Bot started")
 
-# Main function to start the bot
 async def main():
     await on_startup()
     await dp.start_polling(bot)
