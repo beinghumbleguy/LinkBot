@@ -158,7 +158,7 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
     else:
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
-async def generate_growth_report report_type: str = "daily"):
+async def generate_growth_report(report_type: str = "daily"):
     """Generate a growth report for top 20 VIP tokens (> 2.0x growth) added today."""
     logger.info(f"Generating {report_type} growth report")
     current_time = datetime.now(pytz.timezone('America/New_York'))
