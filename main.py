@@ -158,7 +158,7 @@ async def add_to_monitored_tokens(mint_address: str, chat_id: int, initial_mc: f
     else:
         logger.debug(f"CA {mint_address} already in monitored_tokens for chat {chat_id}")
 
-async def generate_growth_report(report_type: str = "daily"):
+async def generate_growth_report report_type: str = "daily"):
     """Generate a growth report for top 20 VIP tokens (> 2.0x growth) added today."""
     logger.info(f"Generating {report_type} growth report")
     current_time = datetime.now(pytz.timezone('America/New_York'))
@@ -787,7 +787,7 @@ async def test_ca(message: types.Message):
         token_name = token_data.get('name', 'Unknown')
         symbol = token_data.get('symbol', '')
         output_text = (
-            f"🔖 Token Name | Symbol: [{token_name}]({pump_fun_url}) | ${symbol}\n"
+            f"📊 [{token_name}]({pump_fun_url}) | ${symbol}\n"
             f"📍 CA: `{ca}`\n"
             f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"🌡️ Hot Level: {token_data.get('hot_level', 'N/A')} {get_hot_level_emoji(token_data.get('hot_level', -1))}"
@@ -854,7 +854,7 @@ async def process_message_with_buttons(message: types.Message):
         token_name = token_data.get('name', 'Unknown')
         symbol = token_data.get('symbol', '')
         pump_fun_url = f"https://pump.fun/coin/{ca}"
-        name_display = f"🔖 Token Name | Symbol: [{token_name}]({pump_fun_url}) | ${symbol}"
+        name_display = f"📊 [{token_name}]({pump_fun_url}) | ${symbol}"
         hot_level = token_data.get('hot_level', 0)
         hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
         output_text = (
