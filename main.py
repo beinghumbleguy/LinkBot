@@ -887,17 +887,29 @@ async def process_message_with_buttons(message: types.Message):
             else:
                 logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
 
-    # Construct Axiom URL and validate
+    # Construct Axiom and Fasol URLs and validate
     axiom_url = f"https://axiom.trade/t/{urllib.parse.quote(ca)}/@lucidswan"
-    parsed_url = urllib.parse.urlparse(axiom_url)
-    if not (parsed_url.scheme in ['http', 'https'] and parsed_url.netloc):
+    fasol_url = f"https://t.me/fasol_robot?start=ref_humbleguy_ca_{ca}"
+    parsed_axiom_url = urllib.parse.urlparse(axiom_url)
+    parsed_fasol_url = urllib.parse.urlparse(fasol_url)
+    if not (parsed_axiom_url.scheme in ['http', 'https'] and parsed_axiom_url.netloc):
         logger.error(f"Invalid Axiom URL for CA {ca}: {axiom_url}")
         output_text += "\n⚠️ Axiom link unavailable due to invalid URL"
         keyboard = None
-    else:
-        logger.debug(f"Valid Axiom URL for CA {ca}: {axiom_url}")
+    elif not (parsed_fasol_url.scheme in ['http', 'https'] and parsed_fasol_url.netloc):
+        logger.error(f"Invalid Fasol URL for CA {ca}: {fasol_url}")
+        output_text += "\n⚠️ Fasol link unavailable due to invalid URL"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Axiom", url=axiom_url)]
+        ])
+    else:
+        logger.debug(f"Valid Axiom URL for CA {ca}: {axiom_url}")
+        logger.debug(f"Valid Fasol URL for CA {ca}: {fasol_url}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Axiom", url=axiom_url),
+                InlineKeyboardButton(text="Fasol", url=fasol_url)
+            ]
         ])
 
     try:
