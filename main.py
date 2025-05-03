@@ -206,7 +206,10 @@ async def generate_growth_report(report_type: str = "daily"):
             continue
 
         growth_ratio = current_mc / initial_mc if initial_mc != 0 else 0
-        logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, growth_ratio={growth_ratio:.2f}x")
+        last_ratio = last_growth_ratios.get(key, 1.0)
+        # Use last_growth_ratio if higher (to reflect peak notified growth)
+        growth_ratio = max(growth_ratio, last_ratio)
+        logger.debug(f"CA {ca}: initial_mc={initial_mc:.2f}, current_mc={current_mc:.2f}, calculated_growth_ratio={current_mc/initial_mc:.2f}x, last_growth_ratio={last_ratio:.2f}x, reported_growth_ratio={growth_ratio:.2f}x")
 
         if growth_ratio > 2.0:
             qualifying_tokens.append({
@@ -405,6 +408,7 @@ async def growthcheck():
                 math.floor(growth_ratio) > math.floor(last_ratio)):
                 last_growth_ratios[key] = growth_ratio
                 updated_tokens = True
+                logger.info(f"Triggered notification for CA {ca}: growth_ratio={growth_ratio:.2f}x, last_ratio={last_ratio:.2f}x, next_increment={next_increment:.2f}")
                 logger.info(f"Updated last_growth_ratio for CA {ca} to {growth_ratio:.2f}x (previous: {last_ratio:.2f}x) due to notification")
                 time_since_added = calculate_time_since(timestamp)
                 initial_mc_str_md = f"**{initial_mc / 1000:.1f}K**" if initial_mc < 1_000_000 else f"**{initial_mc / 1_000_000:.1f}M**"
@@ -552,7 +556,7 @@ class APISessionManager:
             return {"error": "Cloudscraper session not initialized"}
         
         self._session_requests += 1
-        url = f"{self.base_url}?q={mint_address}"
+        url = f"{self.base_url}?q={mint_address}&_={int(time.time())}"
         
         for attempt in range(self.max_retries):
             try:
@@ -729,7 +733,7 @@ async def get_gmgn_token_data(mint_address):
         token_data["name"] = token_info.get("name", "Unknown")
         token_data["symbol"] = token_info.get("symbol", "")
 
-        logger.debug(f"Processed token data for CA {mint_address}: {token_data}")
+        logger.debug(f"Processed token data for CA {mint_address}: market_cap={token_data['market_cap']:.2f}, symbol={token_data['symbol']}")
         return token_data
 
     except Exception as e:
@@ -866,7 +870,7 @@ async def process_message_with_buttons(message: types.Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade/t/{ca}/@lucidswan")
+            InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade t/{ca}/@lucidswan")
         ]
     ])
     
