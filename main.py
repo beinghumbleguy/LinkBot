@@ -15,6 +15,7 @@ from datetime import datetime
 import pytz
 import aiofiles
 import math
+import urllib.parse
 
 # Enable detailed logging
 logging.basicConfig(
@@ -127,6 +128,7 @@ async def save_monitored_tokens():
                 }
                 for key, data in monitored_tokens.items()
             ])
+            logger.debug(f"Saving CSV with {len(df)} tokens: {df[['mint_address', 'symbol', 'last_growth_ratio']].to_dict('records')}")
             df.to_csv(CSV_PATH, index=False)
             logger.info(f"Saved {len(monitored_tokens)} tokens to {CSV_PATH}")
         except Exception as e:
@@ -419,7 +421,8 @@ async def growthcheck():
 
                 growth_message = (
                     f"{emoji} {growth_str} | "
-                    f"💹From {initial_mc_str_md} ↗️ {current_mc_str_md} within **{time_since_added}**{symbol_display}"
+                    f"💹From {initial_mc_str_md} ↗️ {current_mc_str_md} within **{time_since_added}**{symbol_display}\n"
+                    f"📍 CA: `{ca}`"
                 )
 
                 try:
@@ -699,6 +702,18 @@ def calculate_percentage_change(current: float, previous: float) -> str:
     change = ((current - previous) / previous) * 100
     return f"{change:+.2f}%"
 
+def get_hot_level_emoji(hot_level: int) -> str:
+    """Return an emoji based on the hot_level value."""
+    if hot_level == 0:
+        return "🥶"
+    elif hot_level == 1:
+        return "😎"
+    elif hot_level == 2:
+        return "🔥"
+    elif hot_level >= 3:
+        return "🌋"
+    return "❓"  # For invalid or negative values
+
 async def get_gmgn_token_data(mint_address):
     token_data_raw = await api_session_manager.fetch_token_data(mint_address)
     logger.debug(f"Received raw token data for CA {mint_address}: {token_data_raw}")
@@ -732,8 +747,9 @@ async def get_gmgn_token_data(mint_address):
         token_data["contract"] = mint_address
         token_data["name"] = token_info.get("name", "Unknown")
         token_data["symbol"] = token_info.get("symbol", "")
+        token_data["hot_level"] = int(token_info.get("hot_level", 0))
 
-        logger.debug(f"Processed token data for CA {mint_address}: market_cap={token_data['market_cap']:.2f}, symbol={token_data['symbol']}")
+        logger.debug(f"Processed token data for CA {mint_address}: market_cap={token_data['market_cap']:.2f}, symbol={token_data['symbol']}, hot_level={token_data['hot_level']}")
         return token_data
 
     except Exception as e:
@@ -767,11 +783,13 @@ async def test_ca(message: types.Message):
     if "error" in token_data:
         await message.answer(f"⚠️ Error fetching token data for CA `{ca}`: {token_data['error']}", parse_mode="Markdown")
     else:
+        pump_fun_url = f"https://pump.fun/coin/{ca}"
+        token_name = token_data.get('name', 'Unknown')
         output_text = (
-            f"**Token Data**\n\n"
-            f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
+            f"🔖 Token Name: [{token_name}]({pump_fun_url})\n"
             f"📍 CA: `{ca}`\n"
-            f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}"
+            f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
+            f"🌡️ Hot Level: {token_data.get('hot_level', 'N/A')} {get_hot_level_emoji(token_data.get('hot_level', -1))}"
         )
         await message.answer(output_text, parse_mode="Markdown")
     logger.info(f"Tested API fetch for CA: {ca}")
@@ -795,7 +813,6 @@ async def download_csv(message: types.Message):
         await message.answer("⚠️ No monitored tokens CSV found. Try posting a CA in the VIP channel first.")
         logger.warning(f"CSV file not found at {CSV_PATH} for /downloadcsv command")
         return
-
     try:
         async with aiofiles.open(CSV_PATH, mode='rb') as file:
             await bot.send_document(
@@ -831,17 +848,18 @@ async def process_message_with_buttons(message: types.Message):
         price_change_24h = calculate_percentage_change(price, token_data.get('price_24h', 0))
         volume_24h = format_volume(token_data.get('volume_24h', 0))
         security_status = (
-            f"✅ Mint Renounced\n"
-            f"✅ Freeze Renounced"
+            f"  ✅ Mint Renounced\n"
+            f"  ✅ Freeze Renounced"
             if token_data.get('renounced_mint') and token_data.get('renounced_freeze_account')
             else "⚠️ Check Security"
         )
-        symbol = token_data.get('symbol', 'N/A')
-        symbol_display = f"💱 Symbol: ${symbol}" if symbol != 'N/A' else "💱 Symbol: N/A"
+        token_name = token_data.get('name', 'Unknown')
+        pump_fun_url = f"https://pump.fun/coin/{ca}"
+        name_display = f"🔖 Token Name: [{token_name}]({pump_fun_url})"
+        hot_level = token_data.get('hot_level', 0)
+        hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
         output_text = (
-            f"**Token Data**\n\n"
-            f"🔖 Token Name: {token_data.get('name', 'Unknown')}\n"
-            f"{symbol_display}\n"
+            f"{name_display}\n"
             f"📍 CA: `{ca}`\n"
             f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${float(token_data.get('liquidity', '0')):.2f}\n"
@@ -850,9 +868,10 @@ async def process_message_with_buttons(message: types.Message):
             f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
             f"💸 Volume (24h): ${volume_24h}\n"
             f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
+            f"{hot_level_display}\n"
             f"🔒 Security: {security_status}"
         )
-        logger.debug(f"Included symbol '${symbol}' in token data message for CA: {ca}")
+        logger.debug(f"Included hyperlinked token name '{token_name}' and hot_level {hot_level} in token data message for CA: {ca}")
 
         if message.chat.id == VIP_CHAT_ID:
             initial_mc = token_data.get("market_cap", 0)
@@ -868,27 +887,43 @@ async def process_message_with_buttons(message: types.Message):
             else:
                 logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Axiom", url=f"https://axiom.trade t/{ca}/@lucidswan")
-        ]
-    ])
-    
-    if message.chat.type == "channel":
+    # Construct Axiom URL and validate
+    axiom_url = f"https://axiom.trade/t/{urllib.parse.quote(ca)}/@lucidswan"
+    parsed_url = urllib.parse.urlparse(axiom_url)
+    if not (parsed_url.scheme in ['http', 'https'] and parsed_url.netloc):
+        logger.error(f"Invalid Axiom URL for CA {ca}: {axiom_url}")
+        output_text += "\n⚠️ Axiom link unavailable due to invalid URL"
+        keyboard = None
+    else:
+        logger.debug(f"Valid Axiom URL for CA {ca}: {axiom_url}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Axiom", url=axiom_url)]
+        ])
+
+    try:
+        if message.chat.type == "channel":
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        else:
+            await message.reply(
+                text=output_text,
+                reply_markup=keyboard,
+                parse_mode="Markdown",
+                reply_to_message_id=message.message_id
+            )
+        logger.info(f"Added buttons and token info for CA: {ca}")
+    except Exception as e:
+        logger.error(f"Failed to send message for CA {ca}: {str(e)}")
+        output_text += f"\n⚠️ Error posting message: {str(e)}"
         await bot.send_message(
             chat_id=message.chat.id,
             text=output_text,
-            reply_markup=keyboard,
             parse_mode="Markdown"
         )
-    else:
-        await message.reply(
-            text=output_text,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-            reply_to_message_id=message.message_id
-        )
-    logger.info(f"Added buttons and token info for CA: {ca}")
 
 @dp.message(F.text)
 async def add_buttons_if_text_found(message: types.Message):
