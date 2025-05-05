@@ -955,7 +955,7 @@ async def add_buttons_if_text_found(message: types.Message):
         return
 
     logger.debug(f"Waiting 3 seconds before processing CA {ca} in group")
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
     await process_message_with_buttons(message)
 
