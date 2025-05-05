@@ -859,16 +859,17 @@ async def process_message_with_buttons(message: types.Message):
         hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
         output_text = (
             f"{name_display}\n"
-            f"📍 CA: `{ca}`\n"
-            f"📈 Market Cap: ${token_data.get('market_cap_str', 'N/A')}\n"
+            # f"📍 CA: `{ca}`\n"
+            f"📈 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${token_data.get('liquidity_str', 'N/A')}\n"
             f"💰 Price: ${price_display}\n"
             f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
             f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
             f"💸 Volume (24h): ${volume_24h}\n"
             f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
-            f"{hot_level_display}\n"
+            # f"{hot_level_display}\n"
             f"{security_status}"
+            f"`{ca}`\n"
         )
         logger.debug(f"Included hyperlinked token name '{token_name}', symbol '${symbol}', and hot_level {hot_level} in token data message for CA: {ca}")
 
