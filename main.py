@@ -868,7 +868,7 @@ async def process_message_with_buttons(message: types.Message):
             f"💸 Volume (24h): ${volume_24h}\n"
             f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
             # f"{hot_level_display}\n"
-            f"{security_status}\n"
+            f"{security_status}\n\n"
             f"`{ca}`\n"
         )
         logger.debug(f"Included hyperlinked token name '{token_name}', symbol '${symbol}', and hot_level {hot_level} in token data message for CA: {ca}")
