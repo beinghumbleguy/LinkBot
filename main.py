@@ -860,7 +860,7 @@ async def process_message_with_buttons(message: types.Message):
         output_text = (
             f"{name_display}\n"
             # f"📍 CA: `{ca}`\n"
-            f"📈 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
+            f"💎 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${token_data.get('liquidity_str', 'N/A')}\n"
             f"💰 Price: ${price_display}\n"
             # f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
