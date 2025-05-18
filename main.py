@@ -862,6 +862,12 @@ async def process_message_with_buttons(message: types.Message):
         # Parameter: Liq/Supply (% of token supply in liquidity)
         liq_to_supply_ratio = (api_liq / api_mc * 100) if api_mc > 0 and api_liq > 0 else 0
         liq_to_supply_display = f"{liq_to_supply_ratio:.1f}%" if liq_to_supply_ratio > 0 else "N/A"
+
+        # Parameter: PeakVol/MC (24h volume vs market cap)
+        volume_24h_raw = float(token_data.get('volume_24h', 0))
+        logger.debug(f"Calculating PeakVol/MC for CA {ca}: volume_24h={volume_24h_raw}, market_cap={api_mc}")
+        peak_vol_to_mc_ratio = (volume_24h_raw / api_mc * 100) if api_mc > 0 and volume_24h_raw >= 0 else 0
+        peak_vol_to_mc_display = f"{peak_vol_to_mc_ratio:.2f}%" if peak_vol_to_mc_ratio > 0 else "N/A"
         
         output_text = (
             f"{name_display}\n"
@@ -869,9 +875,10 @@ async def process_message_with_buttons(message: types.Message):
             f"💎 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${token_data.get('liquidity_str', 'N/A')}\n"
             f"🌊 Liq/Supply: {liq_to_supply_display}\n"
+            f"💹 PeakVol/MC: {peak_vol_to_mc_display}\n"
             f"💰 Price: ${price_display}\n"
             # f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
-            f"📉 Price Change (1h): {price_change_1h}\n"
+            f"📈 Price Change (1h): {price_change_1h}\n"
             f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
             f"💸 Volume (24h): ${volume_24h}\n"
             f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
