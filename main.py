@@ -844,6 +844,7 @@ async def process_message_with_buttons(message: types.Message):
         output_text = f"🔗 CA: `{ca}`\n⚠️ Error fetching token data: {token_data['error']}"
     else:
         api_mc = token_data.get("market_cap", 0)
+        api_liq = token_data.get("liquidity", 0)
         price = token_data.get('price', 0)
         price_display = format_price(price) if price != 0 else "N/A"
         price_change_1h = calculate_percentage_change(price, token_data.get('price_1h', 0))
@@ -859,7 +860,7 @@ async def process_message_with_buttons(message: types.Message):
         hot_level = token_data.get('hot_level', 0)
         hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
         # Parameter: Liq/Supply (% of token supply in liquidity)
-        liq_to_supply_ratio = (liquidity / api_mc * 100) if api_mc > 0 and liquidity > 0 else 0
+        liq_to_supply_ratio = (api_liq / api_mc * 100) if api_mc > 0 and api_liq > 0 else 0
         liq_to_supply_display = f"{liq_to_supply_ratio:.1f}%" if liq_to_supply_ratio > 0 else "N/A"
         
         output_text = (
