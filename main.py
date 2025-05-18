@@ -857,11 +857,16 @@ async def process_message_with_buttons(message: types.Message):
         name_display = f"📊 [{token_name}]({pump_fun_url}) | ${symbol}"
         hot_level = token_data.get('hot_level', 0)
         hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
+        # Parameter: Liq/Supply (% of token supply in liquidity)
+        liq_to_supply_ratio = (liquidity / market_cap * 100) if market_cap > 0 and liquidity > 0 else 0
+        liq_to_supply_display = f"{liq_to_supply_ratio:.1f}%" if liq_to_supply_ratio > 0 else "N/A"
+        
         output_text = (
             f"{name_display}\n"
             # f"📍 CA: `{ca}`\n"
             f"💎 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${token_data.get('liquidity_str', 'N/A')}\n"
+            f"🌊 Liq/Supply: {liq_to_supply_display}\n"
             f"💰 Price: ${price_display}\n"
             # f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
             f"📉 Price Change (1h): {price_change_1h}\n"
