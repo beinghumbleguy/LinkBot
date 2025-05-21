@@ -858,7 +858,7 @@ async def process_message_with_buttons(message: types.Message):
         pump_fun_url = f"https://pump.fun/coin/{ca}"
         name_display = f"📊 [{token_name}]({pump_fun_url}) | ${symbol}"
         hot_level = token_data.get('hot_level', 0)
-        hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
+        # hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
         # Parameter: Liq/Supply (% of token supply in liquidity)
         liq_to_supply_ratio = (api_liq / api_mc * 100) if api_mc > 0 and api_liq > 0 else 0
         liq_to_supply_display = f"{liq_to_supply_ratio:.1f}%" if liq_to_supply_ratio > 0 else "N/A"
