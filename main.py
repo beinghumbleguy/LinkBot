@@ -48,7 +48,7 @@ CHECK_INTERVAL = 30  # Seconds between growth checks
 MONITORING_DURATION = 21600  # 6 hours in seconds
 monitored_tokens = {}  # Format: {key: {"mint_address": str, "chat_id": int, "initial_mc": float, "timestamp": float, "token_name": str, "symbol": str, "message_id": int}}
 last_growth_ratios = {}  # Tracks last notified growth ratio per CA
-csv_lock = asyncio.Lock()  # Lock for CSV writes
+csv_lock = asyncio.Lock()  # Lock for CSV writes test
 
 # Define channel IDs
 VIP_CHAT_ID = -1002625241334  # Lucid Labs VIP channel ID
