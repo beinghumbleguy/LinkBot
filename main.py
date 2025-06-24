@@ -472,7 +472,6 @@ class APISessionManager:
         self._session_max_requests = 100
         self.max_retries = 5
         self.retry_delay = 2
-        # self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/search"
         self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol"
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.ua = UserAgent()
@@ -550,17 +549,91 @@ class APISessionManager:
             lambda: func(*args, **kwargs)
         )
 
-async def fetch_token_data(self, mint_address):
-    logger.debug(f"Fetching data for mint_address: {mint_address}")
-    await self.randomize_session()
-    if not self.session:
-        logger.error("Cloudscraper session not initialized")
-        return {"error": "Cloudscraper session not initialized"}
+    async def fetch_token_data(self, mint_address):
+        logger.debug(f"Fetching data for mint_address: {mint_address}")
+        await self.randomize_session()
+        if not self.session:
+            logger.error("Cloudscraper session not initialized")
+            return {"error": "Cloudscraper session not initialized"}
 
-    self._session_requests += 1
-    url = f"{self.base_url}/{mint_address}"
+        self._session_requests += 1
+        url = f"{self.base_url}/{mint_address}"
 
-    for attempt in range(self.max_retries):
+        for attempt in range(self.max_retries):
+            try:
+                response = await self._run_in_executor(
+                    self.session.get,
+                    url,
+                    headers=self.headers_dict,
+                    timeout=15
+                )
+                headers_log = {k: v for k, v in response.headers.items()}
+                logger.debug(f"Attempt {attempt + 1} for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {headers_log}")
+
+                if response.status_code != 200:
+                    if response.status_code == 403:
+                        logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 403: {response.text[:100]}, Headers: {headers_log}")
+                        if "Just a moment" in response.text:
+                            logger.warning(f"Cloudflare challenge detected for CA {mint_address}, rotating proxy")
+                            await self.randomize_session(force=True, use_proxy=True)
+                    elif response.status_code == 429:
+                        logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 429: Rate limited, Headers: {headers_log}")
+                        delay = self.retry_delay * (2 ** attempt) * 2
+                        logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
+                    if attempt == self.max_retries - 1:
+                        break
+                    delay = self.retry_delay * (2 ** attempt)
+                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
+                    await asyncio.sleep(delay)
+                    continue
+
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' not in content_type.lower():
+                    logger.warning(f"Non-JSON response for CA {mint_address}: Content-Type={content_type}, Response: {response.text[:500]}")
+                    await self.randomize_session(force=True, use_proxy=True)
+                    return {"error": f"Unexpected Content-Type: {content_type}"}
+
+                content_length = int(response.headers.get('Content-Length', -1))
+                if content_length == 0 or not response.text.strip():
+                    logger.error(f"Empty response for CA {mint_address}: Content-Length={content_length}, Response: {response.text[:500]}")
+                    await self.randomize_session(level=True, use_proxy=True)
+                    return {"error": "Empty response from API"}
+
+                try:
+                    json_data = response.json()
+                    logger.debug(f"Raw response for CA {mint_address} (first 500 chars): {response.text[:500]}")
+                    json_data["headers"] = headers_log
+
+                    if "address" in json_data or ("data" in json_data and isinstance(json_data.get("data"), dict) and "tokens" in json_data["data"]):
+                        return json_data
+                    elif "code" in json_data and json_data.get("code") != 0:
+                        logger.error(f"API error for CA {mint_address}: code={json_data.get('code')}, msg={json_data.get('msg')}")
+                        return {"error": f"API error: code={json_data.get('code')}, msg={json_data.get('msg')}"}
+                    else:
+                        logger.error(f"Unexpected response structure for CA {mint_address}: {response.text[:500]}")
+                        return {"error": f"Unexpected response structure for CA {mint_address}"}
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error for CA {mint_address}: {str(e)}, Response: {response.text[:500]}, Headers: {headers_log}")
+                    if attempt < self.max_retries - 1:
+                        logger.debug(f"Retrying due to JSON decode error for CA {mint_address}")
+                        delay = self.retry_delay * (2 ** attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                    return {"error": f"Invalid JSON response for CA {mint_address}: {str(e)}"}
+
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed: {str(e)}")
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt)
+                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
+                    await asyncio.sleep(delay)
+
+        logger.info(f"All proxy attempts failed for CA {mint_address}, trying without proxy")
+        await self.randomize_session(level=True, use_proxy=False)
         try:
             response = await self._run_in_executor(
                 self.session.get,
@@ -569,122 +642,46 @@ async def fetch_token_data(self, mint_address):
                 timeout=15
             )
             headers_log = {k: v for k, v in response.headers.items()}
-            logger.debug(f"Attempt {attempt + 1} for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {headers_log}")
+            logger.debug(f"Fallback for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {headers_log}")
 
             if response.status_code != 200:
-                if response.status_code == 403:
-                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 403: {response.text[:100]}, Headers: {headers_log}")
-                    if "Just a moment" in response.text:
-                        logger.warning(f"Cloudflare challenge detected for CA {mint_address}, rotating proxy")
-                        await self.randomize_session(level=True, use_proxy=True)
-                elif response.status_code == 429:
-                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with 429: Rate limited, Headers: {headers_log}")
-                    delay = self.retry_delay * (2 ** attempt) * 2
-                    logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
-                if attempt == self.max_retries - 1:
-                    break
-                delay = self.retry_delay * (2 ** attempt)
-                logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
-                await asyncio.sleep(delay)
-                continue
+                logger.warning(f"Fallback for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
+                return {"error": f"Fallback failed for CA {mint_address}: HTTP {response.status_code}"}
 
             content_type = response.headers.get('Content-Type', '')
             if 'application/json' not in content_type.lower():
-                logger.warning(f"Non-JSON response for CA {mint_address}: Content-Type={content_type}, Response: {response.text[:500]}")
-                await self.randomize_session(level=True, use_proxy=True)
+                logger.warning(f"Fallback non-JSON response for CA {mint_address}: Content-Type={content_type}, Response: {response.text[:500]}")
                 return {"error": f"Unexpected Content-Type: {content_type}"}
 
             content_length = int(response.headers.get('Content-Length', -1))
             if content_length == 0 or not response.text.strip():
-                logger.error(f"Empty response for CA {mint_address}: Content-Length={content_length}, Response: {response.text[:500]}")
-                await self.randomize_session(level=True, use_proxy=True)
+                logger.error(f"Fallback empty response for CA {mint_address}: Content-Length={content_length}, Response: {response.text[:500]}")
                 return {"error": "Empty response from API"}
 
             try:
                 json_data = response.json()
-                logger.debug(f"Raw response for CA {mint_address} (first 500 chars): {response.text[:500]}")
-                # Attach headers for downstream cf-ray checks
+                logger.debug(f"Fallback raw response for CA {mint_address} (first 500 chars): {response.text[:500]}")
                 json_data["headers"] = headers_log
 
-                # Check if response is a token object or a search response
                 if "address" in json_data or ("data" in json_data and isinstance(json_data.get("data"), dict) and "tokens" in json_data["data"]):
                     return json_data
                 elif "code" in json_data and json_data.get("code") != 0:
-                    logger.error(f"API error for CA {mint_address}: code={json_data.get('code')}, msg={json_data.get('msg')}")
+                    logger.error(f"Fallback API error for CA {mint_address}: code={json_data.get('code')}, msg={json_data.get('msg')}")
                     return {"error": f"API error: code={json_data.get('code')}, msg={json_data.get('msg')}"}
                 else:
-                    logger.error(f"Unexpected response structure for CA {mint_address}: {response.text[:500]}")
+                    logger.error(f"Fallback unexpected response structure for CA {mint_address}: {response.text[:500]}")
                     return {"error": f"Unexpected response structure for CA {mint_address}"}
 
             except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error for CA {mint_address}: {str(e)}, Response: {response.text[:500]}, Headers: {headers_log}")
-                if attempt < self.max_retries - 1:
-                    logger.debug(f"Retrying due to JSON decode error for CA {mint_address}")
-                    delay = self.retry_delay * (2 ** attempt)
-                    await asyncio.sleep(delay)
-                    continue
+                logger.error(f"Fallback JSON decode error for CA {mint_address}: {str(e)}, Response: {response.text[:500]}, Headers: {headers_log}")
                 return {"error": f"Invalid JSON response for CA {mint_address}: {str(e)}"}
 
         except Exception as e:
-            logger.warning(f"Attempt {attempt + 1} for CA {mint_address} failed: {str(e)}")
-            if attempt < self.max_retries - 1:
-                delay = self.retry_delay * (2 ** attempt)
-                logger.debug(f"Backing off for {delay}s before retry {attempt + 2} for CA {mint_address}")
-                await asyncio.sleep(delay)
+            logger.error(f"Final attempt without proxy failed for CA {mint_address}: {str(e)}")
+            return {"error": f"Failed to fetch data for CA {mint_address}: {str(e)}"}
 
-    logger.info(f"All proxy attempts failed for CA {mint_address}, trying without proxy")
-    await self.randomize_session(level=True, use_proxy=False)
-    try:
-        response = await self._run_in_executor(
-            self.session.get,
-            url,
-            headers=self.headers_dict,
-            timeout=15
-        )
-        headers_log = {k: v for k, v in response.headers.items()}
-        logger.debug(f"Fallback for CA {mint_address} - Status: {response.status_code}, Response length: {len(response.text)}, Headers: {headers_log}")
-
-        if response.status_code != 200:
-            logger.warning(f"Fallback for CA {mint_address} failed with status {response.status_code}: {response.text[:100]}, Headers: {headers_log}")
-            return {"error": f"Fallback failed for CA {mint_address}: HTTP {response.status_code}"}
-
-        content_type = response.headers.get('Content-Type', '')
-        if 'application/json' not in content_type.lower():
-            logger.warning(f"Fallback non-JSON response for CA {mint_address}: Content-Type={content_type}, Response: {response.text[:500]}")
-            return {"error": f"Unexpected Content-Type: {content_type}"}
-
-        content_length = int(response.headers.get('Content-Length', -1))
-        if content_length == 0 or not response.text.strip():
-            logger.error(f"Fallback empty response for CA {mint_address}: Content-Length={content_length}, Response: {response.text[:500]}")
-            return {"error": "Empty response from API"}
-
-        try:
-            json_data = response.json()
-            logger.debug(f"Fallback raw response for CA {mint_address} (first 500 chars): {response.text[:500]}")
-            json_data["headers"] = headers_log
-
-            if "address" in json_data or ("data" in json_data and isinstance(json_data.get("data"), dict) and "tokens" in json_data["data"]):
-                return json_data
-            elif "code" in json_data and json_data.get("code") != 0:
-                logger.error(f"Fallback API error for CA {mint_address}: code={json_data.get('code')}, msg={json_data.get('msg')}")
-                return {"error": f"API error: code={json_data.get('code')}, msg={json_data.get('msg')}"}
-            else:
-                logger.error(f"Fallback unexpected response structure for CA {mint_address}: {response.text[:500]}")
-                return {"error": f"Unexpected response structure for CA {mint_address}"}
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Fallback JSON decode error for CA {mint_address}: {str(e)}, Response: {response.text[:500]}, Headers: {headers_log}")
-            return {"error": f"Invalid JSON response for CA {mint_address}: {str(e)}"}
-
-    except Exception as e:
-        logger.error(f"Final attempt without proxy failed for CA {mint_address}: {str(e)}")
-        return {"error": f"Failed to fetch data for CA {mint_address}: {str(e)}"}
-
-    logger.error(f"Failed to fetch data for CA {mint_address} after {self.max_retries} attempts")
-    return {"error": f"Failed to fetch data for CA {mint_address} after retries"}
+        logger.error(f"Failed to fetch data for CA {mint_address} after {self.max_retries} attempts")
+        return {"error": f"Failed to fetch data for CA {mint_address} after retries"}
 
 api_session_manager = APISessionManager()
 
@@ -890,12 +887,9 @@ async def process_message_with_buttons(message: types.Message):
         pump_fun_url = f"https://pump.fun/coin/{ca}"
         name_display = f"📊 [{token_name}]({pump_fun_url}) | ${symbol}"
         hot_level = token_data.get('hot_level', 0)
-        # hot_level_display = f"🌡️ Hot Level: {hot_level} {get_hot_level_emoji(hot_level)}"
-        # Parameter: Liq/Supply (% of token supply in liquidity)
         liq_to_supply_ratio = (api_liq / api_mc * 100) if api_mc > 0 and api_liq > 0 else 0
         liq_to_supply_display = f"{liq_to_supply_ratio:.1f}%" if liq_to_supply_ratio > 0 else "N/A"
 
-        # Parameter: PeakVol/MC (24h volume vs market cap)
         volume_24h_raw = float(token_data.get('volume_24h', 0))
         logger.debug(f"Calculating PeakVol/MC for CA {ca}: volume_24h={volume_24h_raw}, market_cap={api_mc}")
         peak_vol_to_mc_ratio = (volume_24h_raw / api_mc * 100) if api_mc > 0 and volume_24h_raw >= 0 else 0
@@ -903,18 +897,14 @@ async def process_message_with_buttons(message: types.Message):
         
         output_text = (
             f"{name_display}\n"
-            # f"📍 CA: `{ca}`\n"
             f"💎 MC: ${token_data.get('market_cap_str', 'N/A')}\n"
             f"💧 Liquidity: ${token_data.get('liquidity_str', 'N/A')}\n"
             f"🌊 Liq/Supply: {liq_to_supply_display}\n"
-            # f"💹 PeakVol/MC: {peak_vol_to_mc_display}\n"
             f"💰 Price: ${price_display}\n"
-            # f"📉 Price Change (1h/24h): {price_change_1h} / {price_change_24h}\n"
             f"📈 Price Change (1h): {price_change_1h}\n"
             f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
             f"💸 Volume (24h): ${volume_24h}\n"
             f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
-            # f"{hot_level_display}\n"
             f"{security_status}\n\n"
             f"`{ca}`\n"
         )
@@ -934,7 +924,6 @@ async def process_message_with_buttons(message: types.Message):
             else:
                 logger.warning(f"Skipping CA {ca} for monitoring: initial market cap is 0")
 
-    # Construct Axiom and Fasol URLs and validate
     axiom_url = f"https://axiom.trade/t/{urllib.parse.quote(ca)}/@lucidswan"
     fasol_url = f"https://t.me/fasol_robot?start=ref_humbleguy_ca_{ca}"
     parsed_axiom_url = urllib.parse.urlparse(axiom_url)
