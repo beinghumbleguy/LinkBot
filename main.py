@@ -473,7 +473,7 @@ class APISessionManager:
         self.max_retries = 5
         self.retry_delay = 2
         # self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/search"
-        self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/"
+        self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol"
         
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.ua = UserAgent()
@@ -560,7 +560,7 @@ class APISessionManager:
         
         self._session_requests += 1
         # url = f"{self.base_url}?q={mint_address}&_={int(time.time())}"
-        url = f"{self.base_url}{mint_address}&_={int(time.time())}"
+        url = f"{self.base_url}/{mint_address}"
         
         for attempt in range(self.max_retries):
             try:
