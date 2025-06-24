@@ -474,7 +474,6 @@ class APISessionManager:
         self.retry_delay = 2
         # self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol/search"
         self.base_url = "https://gmgn.ai/defi/quotation/v1/tokens/sol"
-        
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.ua = UserAgent()
 
@@ -497,7 +496,7 @@ class APISessionManager:
                 "port": 7777,
                 "username": "pool-p1-cc-us",
                 "password": "sf3lefz1yj3zwjvy"
-            } for _ in range(9)
+            } for _ in range(50)
         ]
         self.current_proxy_index = 0
         logger.info(f"Initialized proxy list with {len(self.proxy_list)} proxies")
@@ -723,15 +722,29 @@ async def get_gmgn_token_data(mint_address):
         return {"error": token_data_raw["error"]}
 
     try:
-        token_data = {}
-        
-        if not token_data_raw or "data" not in token_data_raw or "tokens" not in token_data_raw["data"] or len(token_data_raw["data"]["tokens"]) == 0:
-            logger.warning(f"No valid token data in response for CA {mint_address}: {token_data_raw}")
-            return {"error": f"No token data returned from API for CA {mint_address}"}
-        
-        token_info = token_data_raw["data"]["tokens"][0]
+        # Handle Cloudflare challenge indicators
+        if "cf-ray" in token_data_raw.get("headers", {}):
+            logger.info(f"Cloudflare headers detected for CA {mint_address}, possible CAPTCHA challenge")
+
+        # Check if response is a single token object or wrapped in 'data' with 'tokens' list
+        token_info = None
+        if isinstance(token_data_raw, dict) and "data" in token_data_raw and isinstance(token_data_raw["data"], dict) and "tokens" in token_data_raw["data"]:
+            if not isinstance(token_data_raw["data"]["tokens"], list):
+                logger.warning(f"Invalid 'tokens' key in response for CA {mint_address}: {token_data_raw}")
+                return {"error": f"No valid token data returned from API for CA {mint_address}"}
+            if len(token_data_raw["data"]["tokens"]) == 0:
+                logger.warning(f"No tokens found in API response for CA {mint_address}: {token_data_raw}")
+                return {"error": f"Token not found for CA {mint_address} on gmgn.ai. Please verify the contract address."}
+            token_info = token_data_raw["data"]["tokens"][0]
+        elif isinstance(token_data_raw, dict) and "address" in token_data_raw:
+            token_info = token_data_raw  # Direct token object
+        else:
+            logger.warning(f"Invalid response structure for CA {mint_address}: {token_data_raw}")
+            return {"error": f"Invalid API response for CA {mint_address}: expected token object or tokens list"}
+
         logger.debug(f"Token info for CA {mint_address}: {token_info}")
         
+        token_data = {}
         price = float(token_info.get("price", 0))
         token_data["price"] = price
         token_data["price_1h"] = float(token_info.get("price_1h", 0))
@@ -739,13 +752,13 @@ async def get_gmgn_token_data(mint_address):
         total_supply = float(token_info.get("total_supply", 0))
         token_data["market_cap"] = price * total_supply
         token_data["market_cap_str"] = format_market_cap(token_data["market_cap"])
-        token_data["liquidity"] = float(token_info.get("liquidity", "0"))
+        token_data["liquidity"] = float(token_info.get("liquidity", 0))
         token_data["liquidity_str"] = format_market_cap(token_data["liquidity"])
         token_data["volume_24h"] = float(token_info.get("volume_24h", 0))
         token_data["swaps_24h"] = token_info.get("swaps_24h", 0)
         token_data["top_10_holder_rate"] = float(token_info.get("top_10_holder_rate", 0)) * 100
-        token_data["renounced_mint"] = bool(token_info.get("renounced_mint", 0))
-        token_data["renounced_freeze_account"] = bool(token_info.get("renounced_freeze_account", 0))
+        token_data["renounced_mint"] = bool(token_info.get("renounced_mint", False))  # Default to False
+        token_data["renounced_freeze_account"] = bool(token_info.get("renounced_freeze_account", False))  # Default to False
         token_data["contract"] = mint_address
         token_data["name"] = token_info.get("name", "Unknown")
         token_data["symbol"] = token_info.get("symbol", "")
@@ -755,8 +768,8 @@ async def get_gmgn_token_data(mint_address):
         return token_data
 
     except Exception as e:
-        logger.error(f"Error processing API response for CA {mint_address}: {str(e)}")
-        return {"error": f"Network or parsing error for CA {mint_address}: {str(e)}"}
+        logger.error(f"Error processing API response for CA {mint_address}: {str(e)}, Raw response: {token_data_raw}")
+        return {"error": f"Failed to process API response for CA {mint_address}: {str(e)}"}
 
 @dp.message(Command(commands=["settext"]))
 async def set_search_text(message: types.Message):
