@@ -736,7 +736,7 @@ async def get_gmgn_token_data(mint_address):
         return {"error": token_data_raw["error"]}
 
     try:
-        # Handle Cloudflare challenge indicators
+        # #Handle Cloudflare challenge indicators
         if "cf-ray" in token_data_raw.get("headers", {}):
             logger.info(f"Cloudflare headers detected for CA {mint_address}, possible CAPTCHA challenge")
 
