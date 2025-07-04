@@ -17,7 +17,7 @@ import aiofiles
 import math
 import urllib.parse
 
-# Enable detailed logging
+# Enable the detailed logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
