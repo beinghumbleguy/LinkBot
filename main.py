@@ -24,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create data directory
+## Create data directory
 os.makedirs("/app/data", exist_ok=True)
 
 # Load environment variables
