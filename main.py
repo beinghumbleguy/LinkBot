@@ -943,9 +943,9 @@ async def process_message_with_buttons(message: types.Message):
         logger.debug(f"Valid Fasol URL for CA {ca}: {fasol_url}")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                # InlineKeyboardButton(text="Axiom", url=axiom_url),
+                InlineKeyboardButton(text="Axiom", url=axiom_url),
                 InlineKeyboardButton(text="Fasol", url=fasol_url),
-                # InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
+                InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
             ]
         ])
 
