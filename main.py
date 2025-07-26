@@ -943,9 +943,9 @@ async def process_message_with_buttons(message: types.Message):
         logger.debug(f"Valid Fasol URL for CA {ca}: {fasol_url}")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="Axiom", url=axiom_url),
+                # InlineKeyboardButton(text="Axiom", url=axiom_url),
                 InlineKeyboardButton(text="Fasol", url=fasol_url),
-                InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
+                # InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
             ]
         ])
 
@@ -1023,6 +1023,19 @@ async def on_startup():
     asyncio.create_task(growthcheck())
     asyncio.create_task(schedule_daily_report())
     logger.info("Button Bot started")
+
+
+import os
+import base64
+import hashlib
+import secrets
+
+code_verifier = secrets.token_urlsafe(32)
+print(f"code_verifier: {code_verifier}")
+code_challenge_bytes = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+code_challenge = base64.urlsafe_b64encode(code_challenge_bytes).rstrip(b'=').decode('utf-8')
+print(f"code_challenge: {code_challenge}")
+## os.environ['X_CODE_VERIFIER'] = code_verifier  # Store temporarily
 
 async def main():
     await on_startup()
