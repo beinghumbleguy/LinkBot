@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 ## Create data directory
 os.makedirs("/app/data", exist_ok=True)
 
-# Load environment variables
+# #Load environment variables
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     logger.error("BOT_TOKEN not set!")
