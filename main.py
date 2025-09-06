@@ -1020,8 +1020,8 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
 
 async def on_startup():
     load_monitored_tokens()
-    asyncio.create_task(growthcheck())
-    asyncio.create_task(schedule_daily_report())
+    ## asyncio.create_task(growthcheck())
+    ## asyncio.create_task(schedule_daily_report())
     logger.info("Button Bot started")
 
 
