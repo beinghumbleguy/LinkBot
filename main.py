@@ -254,7 +254,7 @@ async def generate_growth_report(report_type: str = "daily"):
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌟 Join VIP 🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
+      ##  [InlineKeyboardButton(text="🌟 Join VIP 🌟", url="https://t.me/DegenSwansVIP_bot?start=start")]
     ])
 
     return report_text, keyboard
