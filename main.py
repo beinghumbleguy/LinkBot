@@ -516,7 +516,15 @@ class APISessionManager:
                 price = float(attributes.get("price_usd") or 0)
                 market_cap = float(attributes.get("market_cap_usd") or attributes.get("fdv_usd") or 0)
                 liquidity = float(attributes.get("total_reserve_in_usd") or 0)
-                volume_24h = float((attributes.get("volume_usd") or {}).get("h24") or 0)
+
+                # Handle volume_usd.h24 safely
+                volume_usd = attributes.get("volume_usd", {})
+                volume_24h = 0.0
+                if isinstance(volume_usd, dict) and "h24" in volume_usd:
+                    try:
+                        volume_24h = float(volume_usd["h24"])
+                    except (TypeError, ValueError):
+                        logger.warning(f"Invalid h24 volume value for {mint_address}: {volume_usd['h24']}")
 
                 token_data = {
                     "price": price,
@@ -541,6 +549,7 @@ class APISessionManager:
                 await asyncio.sleep(self.retry_delay * (2 ** attempt))
 
         return {"error": f"Failed to fetch data for {mint_address} after retries"}
+
 
 api_session_manager = APISessionManager()
 
@@ -767,7 +776,7 @@ async def process_message_with_buttons(message: types.Message):
             f"💰 Price: ${price_display}\n"
            # f"📈 Price Change (1h): {price_change_1h}\n"
            # f"🔄 Swaps (24h): {token_data.get('swaps_24h', 'N/A')}\n"
-           # f"💸 Volume (24h): ${volume_24h}\n"
+            f"💸 Volume (24h): ${volume_24h}\n"
             # f"👥 Top 10 Holders: {token_data.get('top_10_holder_rate', 0):.2f}%\n"
             # f"{security_status}\n\n"
             f"`{ca}`\n"
