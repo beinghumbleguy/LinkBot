@@ -474,7 +474,8 @@ class APISessionManager:
         self.headers_dict = {
             "Accept": "application/json",
             "User-Agent": self.ua.random,
-            "x-cg-demo-api-key": os.getenv("COINGECKO_API_KEY", "CG-YOUR-API-KEY")
+            #"x-cg-demo-api-key": os.getenv("COINGECKO_API_KEY", "CG-YOUR-API-KEY")
+            "x-cg-pro-api-key": os.getenv("COINGECKO_API_KEY", "CG-YOUR-API-KEY")
         }
 
     async def _run_in_executor(self, func, *args, **kwargs):
@@ -484,7 +485,8 @@ class APISessionManager:
         )
 
     async def fetch_token_data(self, mint_address):
-        url = f"https://api.coingecko.com/api/v3/onchain/networks/solana/tokens/multi/{mint_address}"
+        #url = f"https://api.coingecko.com/api/v3/onchain/networks/solana/tokens/multi/{mint_address}"
+        url = f"https://pro-api.coingecko.com/api/v3/onchain/networks/solana/tokens/multi/{mint_address}"
         for attempt in range(self.max_retries):
             try:
                 if not self.session:
