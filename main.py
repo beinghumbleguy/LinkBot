@@ -817,7 +817,7 @@ async def process_message_with_buttons(message: types.Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 # InlineKeyboardButton(text="Axiom", url=axiom_url),
-                InlineKeyboardButton(text="Buy on Fasol", url=fasol_url),
+                InlineKeyboardButton(text="Buy on Fasol - 25% Cashback", url=fasol_url),
                 # InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
             ]
         ])
