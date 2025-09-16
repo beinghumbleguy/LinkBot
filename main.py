@@ -818,7 +818,7 @@ async def process_message_with_buttons(message: types.Message):
             [
                 # InlineKeyboardButton(text="Axiom", url=axiom_url),
                 InlineKeyboardButton(text="Buy on Fasol - 25% Cashback", url=fasol_url),
-                # InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
+                InlineKeyboardButton(text="Bloom", url=f"https://t.me/BloomSolana_bot?start=ref_humbleguy_ca_{ca}")
             ]
         ])
 
@@ -892,7 +892,7 @@ async def add_buttons_if_text_found_in_channel(channel_post: types.Message):
     await process_message_with_buttons(channel_post)
 
 async def on_startup():
-    load_monitored_tokens()
+    # load_monitored_tokens()
     ## asyncio.create_task(growthcheck())
     ## asyncio.create_task(schedule_daily_report())
     logger.info("Button Bot started")
